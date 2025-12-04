@@ -28,11 +28,7 @@ class GemmaRepositoryImpl implements GemmaRepository {
       }
 
       print('📦 Using model directly at: $modelPath');
-
-      print('🔗 Setting model path for direct access...');
       await modelManager.setModelPath(modelPath);
-
-      print('✅ Model path set successfully');
 
       print(' Creating inference model...');
       _inferenceModel = await FlutterGemmaPlugin.instance.createModel(
@@ -78,18 +74,11 @@ class GemmaRepositoryImpl implements GemmaRepository {
       final file = File(path);
       if (file.existsSync()) {
         try {
-          final size = await file.length();
-          print('✅ Found model: $path (${(size / 1024 / 1024).toStringAsFixed(1)} MB)');
-
           final isReadable = await file.stat().then((stat) => stat.size > 0);
           if (isReadable) return path;
-
-          print('⚠️ File exists but not readable: $path');
         } catch (e) {
           print('⚠️ Error accessing file: $path - $e');
         }
-      } else {
-        print('❌ Not found: $path');
       }
     }
     return null;
@@ -102,9 +91,7 @@ class GemmaRepositoryImpl implements GemmaRepository {
       final ts = DateTime.now().toIso8601String();
       final header = '[$ts][$contextHint]';
       await file.writeAsString('$header\n$content\n---\n', mode: FileMode.append, flush: true);
-    } catch (_) {
-      // best-effort logging
-    }
+    } catch (_) {}
   }
 
   @override
@@ -117,7 +104,7 @@ class GemmaRepositoryImpl implements GemmaRepository {
       print('🤖 Generating real AI response for: $prompt');
 
       final session = await _inferenceModel!.createSession(
-        temperature: 0.8,
+        temperature: 0.7, // Slightly lowered for more focused answers
         randomSeed: 42,
         topK: 40,
       );
@@ -127,20 +114,11 @@ class GemmaRepositoryImpl implements GemmaRepository {
 
       final response = await session.getResponse();
 
-      print('RAW_MODEL_RESPONSE >>>\n$response\n<<< RAW_MODEL_RESPONSE');
-      await _appendToModelLog(response, contextHint: 'non_stream_final');
-
       await session.close();
-
-      final formattedResponse = TextFormatterService().formatAIResponse(response);
-      print('✅ Generated real AI response: $formattedResponse');
-
-      return formattedResponse;
+      return TextFormatterService().formatAIResponse(response);
     } catch (e) {
       print('❌ Error generating response: $e');
-      final fallbackResponse =
-          'I apologize, but I encountered an error while processing your request. Please try again.';
-      return TextFormatterService().formatAIResponse(fallbackResponse);
+      return "I apologize, but I encountered an error.";
     }
   }
 
@@ -154,7 +132,7 @@ class GemmaRepositoryImpl implements GemmaRepository {
       print('🤖 Generating real streaming AI response for: $prompt');
 
       final session = await _inferenceModel!.createSession(
-        temperature: 0.8,
+        temperature: 0.7,
         randomSeed: 42,
         topK: 40,
       );
@@ -162,53 +140,32 @@ class GemmaRepositoryImpl implements GemmaRepository {
       final formattedPrompt = _formatPrompt(prompt);
       await session.addQueryChunk(Message.text(text: formattedPrompt, isUser: true));
 
-      StringBuffer rawBuffer = StringBuffer();
-
       await for (String token in session.getResponseAsync()) {
-        rawBuffer.write(token);
         final cleanToken = token.trim();
-
-        // Log each token
-        print('RAW_TOKEN: "$token"');
-        await _appendToModelLog(token, contextHint: 'stream_token');
-
-        // FIXED: Only yield the cleaned token.
-        // We do NOT yield accumulated chunks here to avoid duplication.
+        // Filter out system tokens
         if (cleanToken.isNotEmpty &&
             !cleanToken.contains('<end_of_turn>') &&
             !cleanToken.contains('<start_of_turn>') &&
             !cleanToken.contains('model') &&
             !cleanToken.contains('user')) {
-
-          // We pass the raw token or slightly cleaned token directly.
-          // The UI/Cubit will handle aggregation.
           yield token;
         }
       }
-
-      // Log complete aggregated raw stream
-      final rawAll = rawBuffer.toString();
-      print('RAW_STREAM_AGGREGATED >>>\n$rawAll\n<<< RAW_STREAM_AGGREGATED');
-      await _appendToModelLog(rawAll, contextHint: 'stream_aggregated_final');
-
       await session.close();
     } catch (e) {
       print('❌ Error generating streaming response: $e');
-      final fallbackResponse =
-          'I apologize, but I encountered an error while processing your request. Please try again.';
-      yield TextFormatterService().formatAIResponse(fallbackResponse);
+      yield "I apologize, but I encountered an error.";
     }
   }
 
   String _formatPrompt(String userInput) {
+    // UPDATED: Instructions for concise output
     return '''<start_of_turn>user
-$userInput<end_of_turn>
+$userInput
+
+IMPORTANT: Keep your response short, concise, and to the point. Do not give long explanations.<end_of_turn>
 <start_of_turn>model
 ''';
-  }
-
-  String _cleanResponse(String rawResponse) {
-    return TextFormatterService().formatAIResponse(rawResponse);
   }
 
   @override
