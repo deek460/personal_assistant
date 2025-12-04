@@ -89,18 +89,15 @@ class VoiceCubit extends Cubit<VoiceState> {
     emit(VoiceInitializing(_chatHistory));
 
     try {
-      // Initialize Gemma model
       bool gemmaInitialized = await _generateResponseUseCase.repository.initializeModel();
       if (!gemmaInitialized) {
         emit(VoiceError('Failed to initialize AI model', _chatHistory));
         return;
       }
 
-      // Initialize speech recognition service
       bool speechAvailable = await _speechService.init();
       if (speechAvailable) {
         emit(SpeechReady(_chatHistory));
-        // HANDS-FREE: Auto-start listening immediately once ready
         print('VoiceCubit: Services ready. Auto-starting listening...');
         await startListening();
       } else {
@@ -112,7 +109,6 @@ class VoiceCubit extends Cubit<VoiceState> {
   }
 
   Future<void> startListening() async {
-    // Safety check: Don't start listening if TTS is still active (double check)
     if (_ttsService.isSpeaking) {
       await _ttsService.stop();
     }
@@ -125,11 +121,9 @@ class VoiceCubit extends Cubit<VoiceState> {
 
     await _speechService.startListening(
       onResult: (words) {
-        print('VoiceCubit: Recognized words: $words');
         _lastRecognizedText = words;
         emit(VoiceListening(words, _chatHistory));
       },
-      // This now acts as "Session Complete" (valid OR invalid/silence)
       onSessionComplete: () {
         _handleListeningComplete();
       },
@@ -139,31 +133,21 @@ class VoiceCubit extends Cubit<VoiceState> {
   Future<void> stopListening() async {
     print('VoiceCubit: Manually stopping listening...');
     await _speechService.stopListening();
-    // When stopping manually, we might NOT want to auto-restart.
-    // So we check if the state implies manual intervention?
-    // Actually, stopListening implies we want to process what we have or just stop.
     _handleListeningComplete();
   }
 
   void _handleListeningComplete() async {
-    // If silence/empty text
     if (_lastRecognizedText.trim().isEmpty) {
       print('No speech detected (Silence/Error). Restarting loop...');
-
-      // Update UI to Idle briefly
       emit(VoiceIdle(_chatHistory));
 
-      // Auto-restart loop
       _resetStateTimer?.cancel();
       _resetStateTimer = Timer(resetTimeout, () async {
-        if (!isClosed) { // Safety check
-          await startListening();
-        }
+        if (!isClosed) await startListening();
       });
       return;
     }
 
-    // Add user input to chat history
     _chatHistory.add(VoiceChatMessage(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       text: _lastRecognizedText,
@@ -171,52 +155,86 @@ class VoiceCubit extends Cubit<VoiceState> {
       timestamp: DateTime.now(),
     ));
 
-    print('VoiceCubit: Processing input with AI: $_lastRecognizedText');
     emit(VoiceProcessing(_lastRecognizedText, _chatHistory));
 
     try {
-      // Generate AI response with streaming
       await _generateStreamingResponse(_lastRecognizedText);
-
     } catch (e) {
       print('VoiceCubit: Error generating response: $e');
       String errorResponse = "I'm sorry, I encountered an error. Please try again.";
 
+      // Update UI with error
       _chatHistory.add(VoiceChatMessage(
         id: DateTime.now().millisecondsSinceEpoch.toString(),
         text: errorResponse,
-        rawContent: errorResponse,
-        formattedContent: errorResponse,
         isUser: false,
         timestamp: DateTime.now(),
       ));
-
       emit(VoiceResponseReady(_lastRecognizedText, errorResponse, _chatHistory));
-      await _speakResponse(errorResponse);
+
+      // Speak error
+      await _ttsService.speak(errorResponse);
+      await _ttsService.waitForCompletion();
+
+      // Restart loop
+      await startListening();
     }
   }
 
   Future<void> _generateStreamingResponse(String inputText) async {
     String fullRawResponse = '';
+    String sentenceBuffer = '';
+
+    // UI placeholder for the streaming message
+    // We add it to history once, then update it in place via state emissions
+    final messageId = DateTime.now().millisecondsSinceEpoch.toString();
+
+    // We don't add to _chatHistory list yet to avoid duplicates,
+    // we will emit states with the growing text.
 
     try {
       await for (String token in _generateResponseUseCase.callStreaming(inputText)) {
         fullRawResponse += token;
+        sentenceBuffer += token;
+
+        // --- SIMULTANEOUS TTS LOGIC ---
+        // Check for sentence delimiters (. ? ! :)
+        // We look for a punctuation mark followed by a space or end of string
+        if (RegExp(r'[.?!:]').hasMatch(token) || RegExp(r'[.?!:]\s$').hasMatch(sentenceBuffer)) {
+          // Basic check: Ensure we have a reasonable length or it's just an initial "Okay."
+          if (sentenceBuffer.trim().length > 1) {
+            final cleanSentence = TextFormatterService().formatForTTS(sentenceBuffer);
+            print("Queuing sentence for TTS: $cleanSentence");
+            // Fire and forget - add to queue
+            _ttsService.speak(cleanSentence);
+            sentenceBuffer = ''; // Clear buffer
+          }
+        }
+
+        // Update UI with FULL text so far
+        // Note: formattedContent will be handled by the UI using Markdown widget
         emit(VoiceStreamingResponse(inputText, fullRawResponse, false, _chatHistory));
-        await Future.delayed(const Duration(milliseconds: 50));
       }
 
-      // Handle empty response scenario
+      // Process any remaining text in buffer after stream ends
+      if (sentenceBuffer.trim().isNotEmpty) {
+        final cleanSentence = TextFormatterService().formatForTTS(sentenceBuffer);
+        _ttsService.speak(cleanSentence);
+      }
+
+      // Handle empty response
       if (fullRawResponse.trim().isEmpty) {
-        print('VoiceCubit: Warning - Received empty response from model.');
-        fullRawResponse = "I didn't quite catch that. Could you please rephrase?";
+        String fallback = "I didn't quite catch that.";
+        fullRawResponse = fallback;
+        _ttsService.speak(fallback);
       }
 
+      // Finalize UI State
       emit(VoiceStreamingResponse(inputText, fullRawResponse, true, _chatHistory));
-      final formattedResponse = TextFormatterService().formatAIResponse(fullRawResponse);
 
+      final formattedResponse = TextFormatterService().formatAIResponse(fullRawResponse);
       _chatHistory.add(VoiceChatMessage(
-        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        id: messageId,
         text: formattedResponse,
         rawContent: fullRawResponse,
         formattedContent: formattedResponse,
@@ -225,7 +243,18 @@ class VoiceCubit extends Cubit<VoiceState> {
       ));
 
       emit(VoiceResponseReady(inputText, formattedResponse, _chatHistory));
-      await _speakResponse(formattedResponse);
+      emit(VoiceSpeaking(formattedResponse, _chatHistory)); // State indicating speaking
+
+      // --- WAIT FOR AUDIO TO FINISH ---
+      print("Stream done. Waiting for TTS queue to drain...");
+      await _ttsService.waitForCompletion();
+      print("TTS drained. Restarting loop.");
+
+      // Restart Loop
+      _resetStateTimer?.cancel();
+      _resetStateTimer = Timer(resetTimeout, () async {
+        if (!isClosed) await startListening();
+      });
 
     } catch (e) {
       print('Error in streaming response: $e');
@@ -233,36 +262,9 @@ class VoiceCubit extends Cubit<VoiceState> {
     }
   }
 
-  Future<void> _speakResponse(String text) async {
-    final ttsText = TextFormatterService().formatForTTS(text);
-
-    print('VoiceCubit: Speaking response (formatted for TTS): $ttsText');
-    emit(VoiceSpeaking(ttsText, _chatHistory));
-
-    // Wait until speech audio is fully finished
-    await _ttsService.speak(ttsText);
-
-    // HANDS-FREE LOOP: Auto-restart listening
-    _resetStateTimer?.cancel();
-    _resetStateTimer = Timer(resetTimeout, () async {
-      print('VoiceCubit: TTS complete. Auto-restarting listening for hands-free loop...');
-      if (!isClosed) {
-        await startListening();
-      }
-    });
-  }
-
-  Future<void> speak(String text) async {
-    if (text.trim().isNotEmpty) {
-      await _speakResponse(text);
-    }
-  }
-
   Future<void> stopSpeaking() async {
     await _ttsService.stop();
-    // If user manually stops speaking, they probably want to talk now
     emit(VoiceIdle(_chatHistory));
-    // Optional: Auto-start listening here?
   }
 
   Future<void> restartListening() async {
@@ -277,6 +279,7 @@ class VoiceCubit extends Cubit<VoiceState> {
   @override
   Future<void> close() async {
     await _generateResponseUseCase.repository.disposeModel();
+    await _ttsService.stop();
     super.close();
   }
 }

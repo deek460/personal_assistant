@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import '../../data/models/voice_chat_message.dart'; // Adjust import to your model location
-
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart'; // Requires flutter_markdown pkg
+import '../../data/models/voice_chat_message.dart';
 
 class VoiceMessageBubble extends StatefulWidget {
   final VoiceChatMessage message;
@@ -12,23 +12,26 @@ class VoiceMessageBubble extends StatefulWidget {
 }
 
 class _VoiceMessageBubbleState extends State<VoiceMessageBubble> {
+  // Flag to toggle debug view (raw text vs markdown)
   bool _showRaw = false;
 
   @override
   Widget build(BuildContext context) {
     final message = widget.message;
+    final isUser = message.isUser;
 
-    final displayedText = (_showRaw && message.rawContent?.isNotEmpty == true)
-        ? message.rawContent!
-        : (message.formattedContent?.isNotEmpty == true ? message.formattedContent! : message.text);
+    // Determine what text to show
+    final String content = (_showRaw && message.rawContent?.isNotEmpty == true)
+        ? (message.rawContent ?? "")
+        : (message.text);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       child: Row(
-        mainAxisAlignment:
-        message.isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
+        mainAxisAlignment: isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.start, // Align top for chat look
         children: [
-          if (!message.isUser) ...[
+          if (!isUser) ...[
             CircleAvatar(
               radius: 16,
               backgroundColor: Colors.blue,
@@ -36,51 +39,53 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble> {
             ),
             const SizedBox(width: 8),
           ],
+
           Flexible(
             child: Stack(
               children: [
                 Container(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   decoration: BoxDecoration(
-                    color: message.isUser
-                        ? Colors.blue.withAlpha(200)
-                        : Colors.grey.withAlpha(100),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: SelectableText(
-                    displayedText,
-                    style: TextStyle(
-                      color: message.isUser ? Colors.white : Colors.black87,
+                    color: isUser
+                        ? Colors.blue.withAlpha(220)
+                        : Colors.grey.withAlpha(50),
+                    borderRadius: BorderRadius.only(
+                      topLeft: const Radius.circular(16),
+                      topRight: const Radius.circular(16),
+                      bottomLeft: isUser ? const Radius.circular(16) : Radius.zero,
+                      bottomRight: isUser ? Radius.zero : const Radius.circular(16),
                     ),
                   ),
+                  child: isUser
+                      ? Text(
+                    content,
+                    style: const TextStyle(color: Colors.white, fontSize: 16),
+                  )
+                      : _buildMarkdownContent(content),
                 ),
-                Positioned(
-                  top: 2,
-                  right: 2,
-                  child: GestureDetector(
-                    onTap: () {
-                      setState(() {
-                        _showRaw = !_showRaw;
-                      });
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: BoxDecoration(
-                        color: Colors.blue.withAlpha(30),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        _showRaw ? Icons.visibility_off : Icons.visibility,
-                        size: 18,
-                        color: Colors.blue,
+
+                // Debug eye icon to toggle Raw/Formatted (Optional feature you had)
+                if (!isUser)
+                  Positioned(
+                    top: 0,
+                    right: 0,
+                    child: GestureDetector(
+                      onTap: () => setState(() => _showRaw = !_showRaw),
+                      child: Padding(
+                        padding: const EdgeInsets.all(4.0),
+                        child: Icon(
+                          _showRaw ? Icons.visibility_off : Icons.visibility,
+                          size: 14,
+                          color: Colors.grey,
+                        ),
                       ),
                     ),
                   ),
-                ),
               ],
             ),
           ),
-          if (message.isUser) ...[
+
+          if (isUser) ...[
             const SizedBox(width: 8),
             CircleAvatar(
               radius: 16,
@@ -90,6 +95,26 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble> {
           ],
         ],
       ),
+    );
+  }
+
+  Widget _buildMarkdownContent(String text) {
+    return MarkdownBody(
+      data: text,
+      styleSheet: MarkdownStyleSheet(
+        p: const TextStyle(color: Colors.black87, fontSize: 16),
+        strong: const TextStyle(fontWeight: FontWeight.bold, color: Colors.black),
+        code: TextStyle(
+          backgroundColor: Colors.grey.shade200,
+          fontFamily: 'monospace',
+          fontSize: 14,
+        ),
+        codeblockDecoration: BoxDecoration(
+          color: Colors.grey.shade200,
+          borderRadius: BorderRadius.circular(8),
+        ),
+      ),
+      selectable: true,
     );
   }
 }
