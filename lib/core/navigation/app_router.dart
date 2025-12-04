@@ -7,10 +7,11 @@ import '../../features/voice/presentation/pages/voice_chat_screen.dart';
 class AppRouter {
   static const String home = '/';
   static const String chat = '/chat';
-  static const String voiceChat = '/voice_chat'; // Add this line
+  static const String voiceChat = '/voice_chat';
 
+  // CHANGED: Set initialLocation to voiceChat for immediate hands-free mode
   static final GoRouter router = GoRouter(
-    initialLocation: home,
+    initialLocation: voiceChat,
     routes: [
       GoRoute(
         path: home,
@@ -21,7 +22,7 @@ class AppRouter {
         builder: (context, state) => const ChatScreen(),
       ),
       GoRoute(
-        path: voiceChat, // Add this route
+        path: voiceChat,
         builder: (context, state) => const VoiceChatScreen(),
       ),
     ],

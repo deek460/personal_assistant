@@ -22,6 +22,7 @@ class VoiceChatScreen extends StatefulWidget {
 
 class _VoiceChatScreenState extends State<VoiceChatScreen> {
   final ModelManagementService _modelService = ModelManagementService();
+  final ScrollController _scrollController = ScrollController(); // Added ScrollController
   AIModel? _selectedModel;
 
   @override
@@ -30,9 +31,25 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
     _loadSelectedModel();
   }
 
+  @override
+  void dispose() {
+    _scrollController.dispose(); // Dispose controller
+    super.dispose();
+  }
+
   Future<void> _loadSelectedModel() async {
     final model = await _modelService.getSelectedModel();
     setState(() => _selectedModel = model);
+  }
+
+  void _scrollToBottom() {
+    if (_scrollController.hasClients) {
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    }
   }
 
   @override
@@ -79,7 +96,7 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
               },
             ),
             // Rest of your existing body content
-            const Expanded(child: _VoiceChatBody()),
+            Expanded(child: _VoiceChatBody(scrollController: _scrollController)),
           ],
         ),
       ),
@@ -88,7 +105,22 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
 }
 
 class _VoiceChatBody extends StatelessWidget {
-  const _VoiceChatBody();
+  final ScrollController scrollController;
+
+  const _VoiceChatBody({required this.scrollController});
+
+  void _triggerScroll() {
+    // Small delay to allow list to render new item before scrolling
+    Future.delayed(const Duration(milliseconds: 100), () {
+      if (scrollController.hasClients) {
+        scrollController.animateTo(
+          scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -98,6 +130,13 @@ class _VoiceChatBody extends StatelessWidget {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Speech recognition unavailable')),
           );
+        }
+
+        // Auto-scroll logic triggers
+        if (state is VoiceStreamingResponse ||
+            state is VoiceResponseReady ||
+            (state is VoiceListening && state.recognizedWords.isNotEmpty)) {
+          _triggerScroll();
         }
       },
       builder: (context, state) {
@@ -142,7 +181,6 @@ class _VoiceChatBody extends StatelessWidget {
       status = 'Speaking...';
       statusColor = Colors.blue;
     } else if (state is SpeechReady) {
-      // FIXED: Added explicit handling for SpeechReady state
       status = 'Model Loaded. Tap to Speak.';
       statusColor = Colors.green;
     } else if (state is VoiceIdle) {
@@ -196,6 +234,7 @@ class _VoiceChatBody extends StatelessWidget {
               ),
             )
                 : ListView.builder(
+              controller: scrollController, // Attached controller
               padding: const EdgeInsets.all(16),
               itemCount: state.chatHistory.length,
               itemBuilder: (context, index) {
@@ -273,7 +312,7 @@ class _VoiceChatBody extends StatelessWidget {
               ? Colors.red.withAlpha(38)
               : isProcessing
               ? Colors.orange.withAlpha(38)
-              : (state is SpeechReady ? Colors.green.withAlpha(38) : Colors.blue.withAlpha(38)), // Visual hint for ready
+              : (state is SpeechReady ? Colors.green.withAlpha(38) : Colors.blue.withAlpha(38)),
           border: Border.all(
             color: isListening
                 ? Colors.red
