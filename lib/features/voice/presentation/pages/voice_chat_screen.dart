@@ -22,7 +22,7 @@ class VoiceChatScreen extends StatefulWidget {
 
 class _VoiceChatScreenState extends State<VoiceChatScreen> {
   final ModelManagementService _modelService = ModelManagementService();
-  final ScrollController _scrollController = ScrollController(); // Added ScrollController
+  final ScrollController _scrollController = ScrollController();
   AIModel? _selectedModel;
 
   @override
@@ -33,23 +33,13 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
 
   @override
   void dispose() {
-    _scrollController.dispose(); // Dispose controller
+    _scrollController.dispose();
     super.dispose();
   }
 
   Future<void> _loadSelectedModel() async {
     final model = await _modelService.getSelectedModel();
     setState(() => _selectedModel = model);
-  }
-
-  void _scrollToBottom() {
-    if (_scrollController.hasClients) {
-      _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
-      );
-    }
   }
 
   @override
@@ -63,6 +53,17 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
       child: Scaffold(
         appBar: AppBar(
           title: const Text("Voice Chat"),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () {
+              // Standard go back, BlocProvider will auto-close the cubit
+              if (context.canPop()) {
+                context.pop();
+              } else {
+                context.go(AppRouter.home);
+              }
+            },
+          ),
           actions: [
             IconButton(
               icon: const Icon(Icons.clear_all),
@@ -76,16 +77,10 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
               tooltip: 'Home',
               onPressed: () => context.go(AppRouter.home),
             ),
-            IconButton(
-              icon: const Icon(Icons.chat),
-              tooltip: 'Text Chat',
-              onPressed: () => context.go(AppRouter.chat),
-            ),
           ],
         ),
         body: Column(
           children: [
-            // Model Selection Dropdown
             ModelSelectorDropdown(
               selectedModel: _selectedModel,
               onModelSelected: (model) {
@@ -95,7 +90,6 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                 );
               },
             ),
-            // Rest of your existing body content
             Expanded(child: _VoiceChatBody(scrollController: _scrollController)),
           ],
         ),
@@ -110,7 +104,6 @@ class _VoiceChatBody extends StatelessWidget {
   const _VoiceChatBody({required this.scrollController});
 
   void _triggerScroll() {
-    // Small delay to allow list to render new item before scrolling
     Future.delayed(const Duration(milliseconds: 100), () {
       if (scrollController.hasClients) {
         scrollController.animateTo(
@@ -132,7 +125,7 @@ class _VoiceChatBody extends StatelessWidget {
           );
         }
 
-        // Auto-scroll logic triggers
+        // Auto-scroll on relevant states
         if (state is VoiceStreamingResponse ||
             state is VoiceResponseReady ||
             (state is VoiceListening && state.recognizedWords.isNotEmpty)) {
@@ -142,21 +135,11 @@ class _VoiceChatBody extends StatelessWidget {
       builder: (context, state) {
         return Column(
           children: [
-            // Status display
             _buildStatusDisplay(context, state),
-
             const SizedBox(height: 16),
-
-            // Chat history (scrollable)
-            Expanded(
-              child: _buildChatHistory(context, state),
-            ),
-
+            Expanded(child: _buildChatHistory(context, state)),
             const SizedBox(height: 16),
-
-            // Control buttons
             _buildControlButtons(context, state),
-
             const SizedBox(height: 24),
           ],
         );
@@ -174,17 +157,14 @@ class _VoiceChatBody extends StatelessWidget {
     } else if (state is VoiceProcessing) {
       status = 'Processing...';
       statusColor = Colors.orange;
-    } else if (state is VoiceResponseReady) {
-      status = 'Response Ready';
-      statusColor = Colors.green;
-    } else if (state is VoiceSpeaking) {
+    } else if (state is VoiceSpeaking || state is VoiceStreamingResponse) {
       status = 'Speaking...';
       statusColor = Colors.blue;
     } else if (state is SpeechReady) {
-      status = 'Model Loaded. Tap to Speak.';
+      status = 'Model Loaded. Auto-starting...';
       statusColor = Colors.green;
     } else if (state is VoiceIdle) {
-      status = 'Tap microphone to speak';
+      status = 'Paused. Tap microphone to resume.';
       statusColor = Colors.grey;
     } else if (state is SpeechUnavailable) {
       status = 'Microphone Unavailable';
@@ -224,7 +204,6 @@ class _VoiceChatBody extends StatelessWidget {
       ),
       child: Column(
         children: [
-          // Chat messages
           Expanded(
             child: state.chatHistory.isEmpty
                 ? const Center(
@@ -234,17 +213,15 @@ class _VoiceChatBody extends StatelessWidget {
               ),
             )
                 : ListView.builder(
-              controller: scrollController, // Attached controller
+              controller: scrollController,
               padding: const EdgeInsets.all(16),
               itemCount: state.chatHistory.length,
               itemBuilder: (context, index) {
                 final message = state.chatHistory[index];
-                return _buildMessageBubble(message);
+                return VoiceMessageBubble(message: message);
               },
             ),
           ),
-
-          // Current listening/processing display
           if (state is VoiceListening && state.recognizedWords.isNotEmpty)
             Container(
               width: double.infinity,
@@ -265,24 +242,15 @@ class _VoiceChatBody extends StatelessWidget {
     );
   }
 
-  Widget _buildMessageBubble(VoiceChatMessage message) {
-    return VoiceMessageBubble(message: message);
-  }
-
   Widget _buildControlButtons(BuildContext context, VoiceState state) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
-          // Microphone button
           _buildMicButton(context, state),
-
-          // Stop speaking button (only show when speaking)
-          if (state is VoiceSpeaking)
+          if (state is VoiceSpeaking || state is VoiceStreamingResponse)
             _buildStopSpeakingButton(context),
-
-          // Restart button (only show when idle or ready)
           if (state is VoiceIdle || state is SpeechReady)
             _buildRestartButton(context),
         ],
@@ -293,15 +261,15 @@ class _VoiceChatBody extends StatelessWidget {
   Widget _buildMicButton(BuildContext context, VoiceState state) {
     bool isListening = state is VoiceListening;
     bool isProcessing = state is VoiceProcessing;
-    bool canInteract = isListening || (state is VoiceIdle || state is SpeechReady);
+    bool canInteract = true;
 
     return GestureDetector(
       onTap: canInteract ? () {
         final cubit = context.read<VoiceCubit>();
         if (isListening) {
-          cubit.stopListening();
+          cubit.stopListening(); // This now permanently pauses the loop
         } else if (state is VoiceIdle || state is SpeechReady) {
-          cubit.startListening();
+          cubit.startListening(); // This resumes the loop
         }
       } : null,
       child: Container(
@@ -312,13 +280,13 @@ class _VoiceChatBody extends StatelessWidget {
               ? Colors.red.withAlpha(38)
               : isProcessing
               ? Colors.orange.withAlpha(38)
-              : (state is SpeechReady ? Colors.green.withAlpha(38) : Colors.blue.withAlpha(38)),
+              : Colors.blue.withAlpha(38),
           border: Border.all(
             color: isListening
                 ? Colors.red
                 : isProcessing
                 ? Colors.orange
-                : (state is SpeechReady ? Colors.green : Colors.blue),
+                : Colors.blue,
             width: 3,
           ),
         ),
@@ -333,7 +301,7 @@ class _VoiceChatBody extends StatelessWidget {
               ? Colors.red
               : isProcessing
               ? Colors.orange
-              : (state is SpeechReady ? Colors.green : Colors.blue),
+              : Colors.blue,
         ),
       ),
     );

@@ -20,7 +20,8 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble> {
     final message = widget.message;
     final isUser = message.isUser;
 
-    // Determine what text to show
+    // Determine what text to show.
+    // If raw content is available (from streaming or debug), use that for markdown.
     final String content = (_showRaw && message.rawContent?.isNotEmpty == true)
         ? (message.rawContent ?? "")
         : (message.text);
@@ -29,7 +30,7 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble> {
       margin: const EdgeInsets.only(bottom: 12),
       child: Row(
         mainAxisAlignment: isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
-        crossAxisAlignment: CrossAxisAlignment.start, // Align top for chat look
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (!isUser) ...[
             CircleAvatar(
@@ -64,7 +65,7 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble> {
                       : _buildMarkdownContent(content),
                 ),
 
-                // Debug eye icon to toggle Raw/Formatted (Optional feature you had)
+                // Debug eye icon to toggle Raw/Formatted
                 if (!isUser)
                   Positioned(
                     top: 0,
@@ -99,8 +100,11 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble> {
   }
 
   Widget _buildMarkdownContent(String text) {
+    // Key added to ensure rebuilds if text changes significantly during stream,
+    // though MarkdownBody usually handles this well.
     return MarkdownBody(
       data: text,
+      key: ValueKey(text.length),
       styleSheet: MarkdownStyleSheet(
         p: const TextStyle(color: Colors.black87, fontSize: 16),
         strong: const TextStyle(fontWeight: FontWeight.bold, color: Colors.black),
