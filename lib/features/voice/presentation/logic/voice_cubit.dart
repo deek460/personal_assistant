@@ -74,11 +74,9 @@ class VoiceCubit extends Cubit<VoiceState> {
   String _lastRecognizedText = '';
   List<VoiceChatMessage> _chatHistory = [];
 
-  // Timer to reset state after speaking or silence
   Timer? _resetStateTimer;
-  static const Duration resetTimeout = Duration(milliseconds: 500);
+  static const Duration resetTimeout = Duration(milliseconds: 200); // Faster restart for invalid inputs
 
-  // Flag to track if the user manually stopped the session
   bool _isManualStop = false;
 
   VoiceCubit(
@@ -112,7 +110,6 @@ class VoiceCubit extends Cubit<VoiceState> {
   }
 
   Future<void> startListening() async {
-    // Reset manual stop flag
     _isManualStop = false;
 
     if (_ttsService.isSpeaking) {
@@ -140,75 +137,125 @@ class VoiceCubit extends Cubit<VoiceState> {
 
   Future<void> stopListening() async {
     print('VoiceCubit: Manually stopping listening...');
-    _isManualStop = true; // Set flag to prevent auto-restart
-    _resetStateTimer?.cancel(); // Cancel any pending restarts
+    _isManualStop = true;
+    _resetStateTimer?.cancel();
 
     await _speechService.stopListening();
     await _ttsService.stop();
 
-    // Go directly to idle, do NOT process incomplete speech or restart
     emit(VoiceIdle(_chatHistory));
   }
 
   void _handleListeningComplete() async {
     if (_isManualStop) return;
 
-    if (_lastRecognizedText.trim().isEmpty) {
-      print('No speech detected (Silence/Error). Restarting loop...');
-      emit(VoiceIdle(_chatHistory));
+    final String originalText = _lastRecognizedText.trim();
 
-      _resetStateTimer?.cancel();
-      _resetStateTimer = Timer(resetTimeout, () async {
-        if (!isClosed && !_isManualStop) await startListening();
-      });
+    // 1. Check for Silence
+    if (originalText.isEmpty) {
+      _restartLoopImmediately();
       return;
     }
 
+    // 2. PSEUDO-WAKE WORD CHECK ("Jack")
+    // Normalize logic: check if text starts with "jack" (case insensitive)
+    final bool hasWakeWord = originalText.toLowerCase().startsWith('jack');
+
+    if (!hasWakeWord) {
+      print('Ignored input (Missing "Jack"): $originalText');
+      // If we didn't hear "Jack", we ignore and restart listening immediately.
+      // We do NOT update UI history for ignored commands.
+      _restartLoopImmediately();
+      return;
+    }
+
+    // 3. Process the Command (Strip "Jack")
+    // Remove "Jack" from the start (first 4 chars)
+    String command = originalText.substring(4).trim();
+
+    // Clean leading punctuation (e.g., "Jack, tell me..." -> ", tell me..." -> "tell me...")
+    command = command.replaceAll(RegExp(r'^[,.?!:\s]+'), '');
+
+    // 4. Check if Command is Empty (User just said "Jack")
+    if (command.isEmpty) {
+      print('User said only "Jack". Asking for input.');
+
+      // Update UI
+      _chatHistory.add(VoiceChatMessage(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        text: "Jack",
+        isUser: true,
+        timestamp: DateTime.now(),
+      ));
+
+      const response = "Yes?";
+      emit(VoiceResponseReady("Jack", response, _chatHistory)); // Brief flash state
+
+      // Speak "Yes?" and then listen again
+      await _ttsService.speak(response);
+      await _ttsService.waitForCompletion();
+
+      if (!_isManualStop) await startListening();
+      return;
+    }
+
+    // --- PROCEED WITH VALID COMMAND ---
+
+    // Update history with the FULL recognized text (including Jack for context) or just command?
+    // Let's show full text "Jack, what is..." so user knows it was heard.
     _chatHistory.add(VoiceChatMessage(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
-      text: _lastRecognizedText,
+      text: originalText,
       isUser: true,
       timestamp: DateTime.now(),
     ));
 
-    emit(VoiceProcessing(_lastRecognizedText, _chatHistory));
+    emit(VoiceProcessing(originalText, _chatHistory));
 
     try {
-      await _generateStreamingResponse(_lastRecognizedText);
+      await _generateStreamingResponse(command); // Pass only command to AI
     } catch (e) {
-      print('VoiceCubit: Error generating response: $e');
-      String errorResponse = "I'm sorry, I encountered an error. Please try again.";
-
-      _chatHistory.add(VoiceChatMessage(
-        id: DateTime.now().millisecondsSinceEpoch.toString(),
-        text: errorResponse,
-        isUser: false,
-        timestamp: DateTime.now(),
-      ));
-      emit(VoiceResponseReady(_lastRecognizedText, errorResponse, _chatHistory));
-
-      await _ttsService.speak(errorResponse);
-      await _ttsService.waitForCompletion();
-
-      if (!_isManualStop) await startListening();
+      print('VoiceCubit: Error: $e');
+      _handleErrorAndRestart();
     }
+  }
+
+  void _restartLoopImmediately() {
+    // Brief flicker to Idle to indicate reset, then start
+    emit(VoiceIdle(_chatHistory));
+    _resetStateTimer?.cancel();
+    _resetStateTimer = Timer(resetTimeout, () async {
+      if (!isClosed && !_isManualStop) await startListening();
+    });
+  }
+
+  void _handleErrorAndRestart() async {
+    String errorResponse = "I'm sorry, I encountered an error.";
+    _chatHistory.add(VoiceChatMessage(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      text: errorResponse,
+      isUser: false,
+      timestamp: DateTime.now(),
+    ));
+    emit(VoiceResponseReady("", errorResponse, _chatHistory));
+    await _ttsService.speak(errorResponse);
+    await _ttsService.waitForCompletion();
+    if (!_isManualStop) await startListening();
   }
 
   Future<void> _generateStreamingResponse(String inputText) async {
     String fullRawResponse = '';
     String sentenceBuffer = '';
-
-    // Create a temporary ID for the streaming message
     final streamMessageId = 'stream_${DateTime.now().millisecondsSinceEpoch}';
 
     try {
       await for (String token in _generateResponseUseCase.callStreaming(inputText)) {
-        if (_isManualStop) break; // Stop generating if user stopped
+        if (_isManualStop) break;
 
         fullRawResponse += token;
         sentenceBuffer += token;
 
-        // --- SIMULTANEOUS TTS ---
+        // Simultaneous TTS
         if (RegExp(r'[.?!:]').hasMatch(token) || RegExp(r'[.?!:]\s$').hasMatch(sentenceBuffer)) {
           if (sentenceBuffer.trim().length > 1) {
             final cleanSentence = TextFormatterService().formatForTTS(sentenceBuffer);
@@ -217,22 +264,20 @@ class VoiceCubit extends Cubit<VoiceState> {
           }
         }
 
-        // --- SIMULTANEOUS UI UPDATE ---
-        // Create a temporary message with the current incomplete text
+        // UI Update
         final streamingMessage = VoiceChatMessage(
           id: streamMessageId,
-          text: fullRawResponse, // Markdown widget will render this
+          text: fullRawResponse,
           rawContent: fullRawResponse,
           isUser: false,
           timestamp: DateTime.now(),
         );
 
-        // Emit state with history + the streaming message appended
         emit(VoiceStreamingResponse(
             inputText,
             fullRawResponse,
             false,
-            [..._chatHistory, streamingMessage] // Append explicitly for UI
+            [..._chatHistory, streamingMessage]
         ));
       }
 
@@ -249,7 +294,7 @@ class VoiceCubit extends Cubit<VoiceState> {
         _ttsService.speak(fallback);
       }
 
-      // Finalize: Add the REAL final message to history
+      // Finalize
       final formattedResponse = TextFormatterService().formatAIResponse(fullRawResponse);
       final finalMessage = VoiceChatMessage(
         id: streamMessageId,
@@ -265,15 +310,10 @@ class VoiceCubit extends Cubit<VoiceState> {
       emit(VoiceResponseReady(inputText, formattedResponse, _chatHistory));
       emit(VoiceSpeaking(formattedResponse, _chatHistory));
 
-      // Wait for audio
       await _ttsService.waitForCompletion();
 
-      // Restart Loop
       if (!_isManualStop) {
-        _resetStateTimer?.cancel();
-        _resetStateTimer = Timer(resetTimeout, () async {
-          if (!isClosed && !_isManualStop) await startListening();
-        });
+        _restartLoopImmediately();
       }
 
     } catch (e) {
@@ -283,7 +323,7 @@ class VoiceCubit extends Cubit<VoiceState> {
   }
 
   Future<void> stopSpeaking() async {
-    _isManualStop = true; // Treat stop speaking as manual stop
+    _isManualStop = true;
     await _ttsService.stop();
     emit(VoiceIdle(_chatHistory));
   }

@@ -163,7 +163,7 @@ class GemmaRepositoryImpl implements GemmaRepository {
     return '''<start_of_turn>user
 $userInput
 
-IMPORTANT: Keep your response short, concise, and to the point. Do not give long explanations.<end_of_turn>
+IMPORTANT: Keep your response short. Do not give long explanations. But be friendly.<end_of_turn>
 <start_of_turn>model
 ''';
   }
