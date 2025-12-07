@@ -1,12 +1,16 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:permission_handler/permission_handler.dart'; // Import Permission Handler
+import 'package:permission_handler/permission_handler.dart';
+import 'package:file_picker/file_picker.dart';
 import '../../../../core/services/speech_to_text_service.dart';
 import '../../../../core/services/text_to_speech_service.dart';
 import '../../data/models/voice_chat_message.dart';
 import '../../../gemma_integration/data/repositories/gemma_repository_impl.dart';
 import '../../../gemma_integration/domain/usecases/generate_response_usecase.dart';
 import '../../../../core/services/text_formatter_service.dart';
+import '../../../../core/models/ai_model.dart';
+import '../../../../core/services/model_management_service.dart';
 
 abstract class VoiceState {
   final List<VoiceChatMessage> chatHistory;
@@ -18,7 +22,8 @@ class VoiceInitial extends VoiceState {
 }
 
 class VoiceInitializing extends VoiceState {
-  VoiceInitializing(List<VoiceChatMessage> chatHistory) : super(chatHistory);
+  final String message;
+  VoiceInitializing(List<VoiceChatMessage> chatHistory, {this.message = "Initializing..."}) : super(chatHistory);
 }
 
 class SpeechReady extends VoiceState {
@@ -71,13 +76,12 @@ class VoiceCubit extends Cubit<VoiceState> {
   final SpeechToTextService _speechService;
   final TextToSpeechService _ttsService;
   final GenerateResponseUseCase _generateResponseUseCase;
+  final ModelManagementService _modelManagementService = ModelManagementService();
 
   String _lastRecognizedText = '';
   List<VoiceChatMessage> _chatHistory = [];
-
   Timer? _resetStateTimer;
   static const Duration resetTimeout = Duration(milliseconds: 200);
-
   bool _isManualStop = false;
 
   VoiceCubit(
@@ -86,25 +90,35 @@ class VoiceCubit extends Cubit<VoiceState> {
       this._generateResponseUseCase,
       ) : super(VoiceInitial());
 
-  Future<void> initializeServices() async {
-    print('VoiceCubit: Initializing services...');
-    emit(VoiceInitializing(_chatHistory));
+  Future<void> initializeServices({AIModel? specificModel}) async {
+    emit(VoiceInitializing(_chatHistory, message: "Checking permissions..."));
 
     try {
-      // --- PERMISSION REQUEST BLOCK ---
       await _requestStoragePermission();
 
-      // Initialize Gemma model
-      bool gemmaInitialized = await _generateResponseUseCase.repository.initializeModel();
+      AIModel? modelToLoad = specificModel;
+      if (modelToLoad == null) {
+        modelToLoad = await _modelManagementService.getSelectedModel();
+      }
+
+      String initMessage = modelToLoad != null
+          ? "Loading ${modelToLoad.name}..."
+          : "Loading default model...";
+
+      emit(VoiceInitializing(_chatHistory, message: initMessage));
+
+      bool gemmaInitialized = await _generateResponseUseCase.repository.initializeModel(
+          modelPath: modelToLoad?.address
+      );
+
       if (!gemmaInitialized) {
-        emit(VoiceError('Failed to initialize AI model. Check permissions or file location.', _chatHistory));
+        emit(VoiceError('Failed to load model. Please select a valid .task file.', _chatHistory));
         return;
       }
 
       bool speechAvailable = await _speechService.init();
       if (speechAvailable) {
         emit(SpeechReady(_chatHistory));
-        print('VoiceCubit: Services ready. Auto-starting listening...');
         await startListening();
       } else {
         emit(SpeechUnavailable(_chatHistory));
@@ -114,33 +128,57 @@ class VoiceCubit extends Cubit<VoiceState> {
     }
   }
 
+  Future<void> switchModel(AIModel model) async {
+    print("Switching to model: ${model.name} at ${model.address}");
+    await stopListening();
+    await _modelManagementService.setSelectedModelId(model.id);
+    await initializeServices(specificModel: model);
+  }
+
+  // Updated to accept custom name and return the model
+  Future<AIModel?> pickAndAddModel({String? customName}) async {
+    try {
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.any,
+      );
+
+      if (result != null && result.files.single.path != null) {
+        String path = result.files.single.path!;
+        String fileName = result.files.single.name;
+
+        final newModel = AIModel(
+          id: 'custom-${DateTime.now().millisecondsSinceEpoch}',
+          name: customName ?? fileName, // Use custom name if provided
+          address: path,
+          isDefault: false,
+        );
+
+        await _modelManagementService.addModel(newModel);
+
+        // Return the model so UI can select it
+        return newModel;
+      } else {
+        print("File picking canceled");
+        return null;
+      }
+    } catch (e) {
+      emit(VoiceError("Failed to pick file: $e", _chatHistory));
+      return null;
+    }
+  }
+
   Future<void> _requestStoragePermission() async {
-    // Android 11+ (API 30+) requires MANAGE_EXTERNAL_STORAGE for "All files access"
-    // to read arbitrary files in Downloads folder.
-    if (await Permission.manageExternalStorage.request().isGranted) {
-      return;
-    }
-
-    // Fallback for older Android versions
-    if (await Permission.storage.request().isGranted) {
-      return;
-    }
-
-    // If neither granted, print warning (app might fail to find model)
-    print("WARNING: Storage permissions denied. Model loading may fail.");
+    if (await Permission.manageExternalStorage.request().isGranted) return;
+    if (await Permission.storage.request().isGranted) return;
+    print("WARNING: Storage permissions denied.");
   }
 
   Future<void> startListening() async {
     _isManualStop = false;
+    if (_ttsService.isSpeaking) await _ttsService.stop();
 
-    if (_ttsService.isSpeaking) {
-      await _ttsService.stop();
-    }
-
-    print('VoiceCubit: Starting listening...');
     _lastRecognizedText = '';
     emit(VoiceListening("", _chatHistory));
-
     _resetStateTimer?.cancel();
 
     await _speechService.startListening(
@@ -149,27 +187,21 @@ class VoiceCubit extends Cubit<VoiceState> {
         emit(VoiceListening(words, _chatHistory));
       },
       onSessionComplete: () {
-        if (!_isManualStop) {
-          _handleListeningComplete();
-        }
+        if (!_isManualStop) _handleListeningComplete();
       },
     );
   }
 
   Future<void> stopListening() async {
-    print('VoiceCubit: Manually stopping listening...');
     _isManualStop = true;
     _resetStateTimer?.cancel();
-
     await _speechService.stopListening();
     await _ttsService.stop();
-
     emit(VoiceIdle(_chatHistory));
   }
 
   void _handleListeningComplete() async {
     if (_isManualStop) return;
-
     final String originalText = _lastRecognizedText.trim();
 
     if (originalText.isEmpty) {
@@ -178,9 +210,7 @@ class VoiceCubit extends Cubit<VoiceState> {
     }
 
     final bool hasWakeWord = originalText.toLowerCase().startsWith('jack');
-
     if (!hasWakeWord) {
-      print('Ignored input (Missing "Jack"): $originalText');
       _restartLoopImmediately();
       return;
     }
@@ -189,8 +219,6 @@ class VoiceCubit extends Cubit<VoiceState> {
     command = command.replaceAll(RegExp(r'^[,.?!:\s]+'), '');
 
     if (command.isEmpty) {
-      print('User said only "Jack". Asking for input.');
-
       _chatHistory.add(VoiceChatMessage(
         id: DateTime.now().millisecondsSinceEpoch.toString(),
         text: "Jack",
@@ -200,10 +228,8 @@ class VoiceCubit extends Cubit<VoiceState> {
 
       const response = "Yes?";
       emit(VoiceResponseReady("Jack", response, _chatHistory));
-
       await _ttsService.speak(response);
       await _ttsService.waitForCompletion();
-
       if (!_isManualStop) await startListening();
       return;
     }
@@ -220,7 +246,6 @@ class VoiceCubit extends Cubit<VoiceState> {
     try {
       await _generateStreamingResponse(command);
     } catch (e) {
-      print('VoiceCubit: Error: $e');
       _handleErrorAndRestart();
     }
   }
@@ -255,7 +280,6 @@ class VoiceCubit extends Cubit<VoiceState> {
     try {
       await for (String token in _generateResponseUseCase.callStreaming(inputText)) {
         if (_isManualStop) break;
-
         fullRawResponse += token;
         sentenceBuffer += token;
 
@@ -313,12 +337,9 @@ class VoiceCubit extends Cubit<VoiceState> {
 
       await _ttsService.waitForCompletion();
 
-      if (!_isManualStop) {
-        _restartLoopImmediately();
-      }
+      if (!_isManualStop) _restartLoopImmediately();
 
     } catch (e) {
-      print('Error in streaming response: $e');
       rethrow;
     }
   }

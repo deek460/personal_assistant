@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import '../../features/voice/presentation/logic/voice_cubit.dart';
 import '../../core/models/ai_model.dart';
 import '../../core/services/model_management_service.dart';
-import 'add_model_dialog.dart';
 
 class ModelSelectorDropdown extends StatefulWidget {
   final Function(AIModel) onModelSelected;
@@ -28,25 +29,88 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
     _loadModels();
   }
 
-  Future<void> _loadModels() async {
-    setState(() => _isLoading = true);
-    final models = await _modelService.getModels();
-    setState(() {
-      _models = models;
-      _isLoading = false;
-    });
+  @override
+  void didUpdateWidget(ModelSelectorDropdown oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.selectedModel != oldWidget.selectedModel) {
+      _loadModels();
+    }
   }
 
-  Future<void> _showAddModelDialog() async {
-    final result = await showDialog<AIModel>(
+  Future<void> _loadModels() async {
+    if (_models.isEmpty) setState(() => _isLoading = true);
+
+    final models = await _modelService.getModels();
+
+    if (mounted) {
+      setState(() {
+        _models = models;
+        _isLoading = false;
+      });
+    }
+  }
+
+  // New method to handle adding a model directly from dropdown
+  Future<void> _handleAddModel() async {
+    final nameController = TextEditingController();
+
+    // 1. Show Dialog to get Name
+    final name = await showDialog<String>(
       context: context,
-      builder: (context) => const AddModelDialog(),
+      builder: (context) => AlertDialog(
+        title: const Text('Add New Model'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Enter a name for your model, then select the file.'),
+            const SizedBox(height: 16),
+            TextField(
+              controller: nameController,
+              decoration: const InputDecoration(
+                labelText: 'Model Name',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, nameController.text.trim()),
+            child: const Text('Select File'),
+          ),
+        ],
+      ),
     );
 
-    if (result != null) {
-      await _modelService.addModel(result);
-      await _loadModels();
-      widget.onModelSelected(result);
+    if (name == null) return; // User cancelled
+
+    // 2. Trigger Cubit Browsing logic
+    if (mounted) {
+      // Use the builder context from the parent or ensure this context can access cubit
+      // Since this widget is inside VoiceChatScreen which has the provider, this context should work
+      // if BlocProvider is above VoiceChatScreen.
+      // Wait, VoiceChatScreen wraps its body in BlocProvider.
+      // This widget is a child of VoiceChatScreen's body. So context.read<VoiceCubit>() works.
+
+      final cubit = context.read<VoiceCubit>();
+
+      // Pass the name to the cubit's picking function
+      final newModel = await cubit.pickAndAddModel(customName: name.isEmpty ? null : name);
+
+      if (newModel != null) {
+        // 3. Update local list immediately
+        await _loadModels();
+
+        // 4. Select the new model
+        widget.onModelSelected(newModel);
+
+        // 5. Trigger switch in cubit (pickAndAddModel adds it but we want to ensure UI sync)
+        cubit.switchModel(newModel);
+      }
     }
   }
 
@@ -80,11 +144,11 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
       await _modelService.deleteModel(model.id);
       await _loadModels();
 
-      // If deleted model was selected, select default
       if (widget.selectedModel?.id == model.id) {
         final defaultModel = _models.where((m) => m.isDefault).firstOrNull;
         if (defaultModel != null) {
           widget.onModelSelected(defaultModel);
+          context.read<VoiceCubit>().switchModel(defaultModel);
         }
       }
     }
@@ -99,6 +163,11 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
       );
     }
 
+    String? dropdownValue = widget.selectedModel?.id;
+    if (_models.isNotEmpty && !_models.any((m) => m.id == dropdownValue)) {
+      dropdownValue = null;
+    }
+
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
@@ -107,13 +176,15 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
-          value: widget.selectedModel?.id,
+          value: dropdownValue,
           isExpanded: true,
           hint: const Padding(
             padding: EdgeInsets.all(12),
             child: Text('Select Model'),
           ),
+          // Construct Items List
           items: [
+            // 1. Existing Models
             ..._models.map((model) => DropdownMenuItem<String>(
               value: model.id,
               child: GestureDetector(
@@ -163,19 +234,20 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
                 ),
               ),
             )),
-            DropdownMenuItem<String>(
-              value: 'add_model',
-              child: Container(
-                padding: const EdgeInsets.all(12),
+            // 2. Add Model Option
+            const DropdownMenuItem<String>(
+              value: 'ADD_NEW_MODEL',
+              child: Padding(
+                padding: EdgeInsets.all(12),
                 child: Row(
                   children: [
-                    Icon(Icons.add, color: Colors.blue.shade600),
-                    const SizedBox(width: 8),
+                    Icon(Icons.add_circle_outline, color: Colors.blue),
+                    SizedBox(width: 8),
                     Text(
-                      'Add Model',
+                      'Add New Model...',
                       style: TextStyle(
-                        color: Colors.blue.shade600,
-                        fontWeight: FontWeight.w500,
+                          color: Colors.blue,
+                          fontWeight: FontWeight.bold
                       ),
                     ),
                   ],
@@ -184,8 +256,8 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
             ),
           ],
           onChanged: (value) async {
-            if (value == 'add_model') {
-              await _showAddModelDialog();
+            if (value == 'ADD_NEW_MODEL') {
+              await _handleAddModel();
             } else if (value != null) {
               final selectedModel = _models.where((m) => m.id == value).first;
               await _modelService.setSelectedModelId(value);

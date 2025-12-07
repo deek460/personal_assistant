@@ -50,49 +50,65 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
           TextToSpeechService(),
           GenerateResponseUseCase(GemmaRepositoryImpl())
       )..initializeServices(),
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text("Voice Chat"),
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back),
-            onPressed: () {
-              // Standard go back, BlocProvider will auto-close the cubit
-              if (context.canPop()) {
-                context.pop();
-              } else {
-                context.go(AppRouter.home);
-              }
-            },
-          ),
-          actions: [
-            IconButton(
-              icon: const Icon(Icons.clear_all),
-              tooltip: 'Clear History',
-              onPressed: () {
-                context.read<VoiceCubit>().clearChatHistory();
-              },
-            ),
-            IconButton(
-              icon: const Icon(Icons.home),
-              tooltip: 'Home',
-              onPressed: () => context.go(AppRouter.home),
-            ),
-          ],
-        ),
-        body: Column(
-          children: [
-            ModelSelectorDropdown(
-              selectedModel: _selectedModel,
-              onModelSelected: (model) {
-                setState(() => _selectedModel = model);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Selected: ${model.name}')),
-                );
-              },
-            ),
-            Expanded(child: _VoiceChatBody(scrollController: _scrollController)),
-          ],
-        ),
+      child: Builder(
+          builder: (context) {
+            return Scaffold(
+              appBar: AppBar(
+                title: const Text("Voice Chat"),
+                leading: IconButton(
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: () {
+                    if (context.canPop()) {
+                      context.pop();
+                    } else {
+                      context.go(AppRouter.home);
+                    }
+                  },
+                ),
+                actions: [
+                  IconButton(
+                    icon: const Icon(Icons.clear_all),
+                    tooltip: 'Clear History',
+                    onPressed: () {
+                      context.read<VoiceCubit>().clearChatHistory();
+                    },
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.home),
+                    tooltip: 'Home',
+                    onPressed: () => context.go(AppRouter.home),
+                  ),
+                ],
+              ),
+              body: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: ModelSelectorDropdown(
+                            selectedModel: _selectedModel,
+                            onModelSelected: (model) {
+                              setState(() => _selectedModel = model);
+                              context.read<VoiceCubit>().switchModel(model);
+
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Switching to: ${model.name}...')),
+                              );
+                            },
+                          ),
+                        ),
+                        // Removed the external "Add Model" button
+                      ],
+                    ),
+                  ),
+
+                  Expanded(child: _VoiceChatBody(scrollController: _scrollController)),
+                ],
+              ),
+            );
+          }
       ),
     );
   }
@@ -125,7 +141,6 @@ class _VoiceChatBody extends StatelessWidget {
           );
         }
 
-        // Auto-scroll on relevant states
         if (state is VoiceStreamingResponse ||
             state is VoiceResponseReady ||
             (state is VoiceListening && state.recognizedWords.isNotEmpty)) {
@@ -151,8 +166,11 @@ class _VoiceChatBody extends StatelessWidget {
     String status;
     Color statusColor;
 
-    if (state is VoiceListening) {
-      status = 'Listening...';
+    if (state is VoiceInitializing) {
+      status = (state as VoiceInitializing).message;
+      statusColor = Colors.orange;
+    } else if (state is VoiceListening) {
+      status = 'Listening for "Jack"...';
       statusColor = Colors.red;
     } else if (state is VoiceProcessing) {
       status = 'Processing...';
@@ -161,7 +179,7 @@ class _VoiceChatBody extends StatelessWidget {
       status = 'Speaking...';
       statusColor = Colors.blue;
     } else if (state is SpeechReady) {
-      status = 'Model Loaded. Auto-starting...';
+      status = 'Ready. Say "Jack" to start.';
       statusColor = Colors.green;
     } else if (state is VoiceIdle) {
       status = 'Paused. Tap microphone to resume.';
@@ -170,7 +188,7 @@ class _VoiceChatBody extends StatelessWidget {
       status = 'Microphone Unavailable';
       statusColor = Colors.red;
     } else if (state is VoiceError) {
-      status = 'Error initializing';
+      status = (state as VoiceError).errorMessage;
       statusColor = Colors.red;
     } else {
       status = 'Initializing...';
@@ -187,6 +205,7 @@ class _VoiceChatBody extends StatelessWidget {
       ),
       child: Text(
         status,
+        textAlign: TextAlign.center,
         style: TextStyle(
           color: statusColor,
           fontWeight: FontWeight.bold,
@@ -208,7 +227,7 @@ class _VoiceChatBody extends StatelessWidget {
             child: state.chatHistory.isEmpty
                 ? const Center(
               child: Text(
-                'Start talking to begin the conversation!',
+                'Say "Jack" followed by your question!',
                 style: TextStyle(fontStyle: FontStyle.italic),
               ),
             )
@@ -233,7 +252,7 @@ class _VoiceChatBody extends StatelessWidget {
                 border: Border.all(color: Colors.blue.withAlpha(100)),
               ),
               child: Text(
-                'You\'re saying: ${state.recognizedWords}',
+                'Hearing: ${state.recognizedWords}',
                 style: const TextStyle(fontStyle: FontStyle.italic),
               ),
             ),
@@ -267,9 +286,9 @@ class _VoiceChatBody extends StatelessWidget {
       onTap: canInteract ? () {
         final cubit = context.read<VoiceCubit>();
         if (isListening) {
-          cubit.stopListening(); // This now permanently pauses the loop
+          cubit.stopListening();
         } else if (state is VoiceIdle || state is SpeechReady) {
-          cubit.startListening(); // This resumes the loop
+          cubit.startListening();
         }
       } : null,
       child: Container(
