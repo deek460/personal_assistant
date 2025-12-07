@@ -104,6 +104,7 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
     }
   }
 
+  // RESTORED: Delete functionality
   Future<void> _showDeleteConfirmation(AIModel model) async {
     if (model.isDefault) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -134,6 +135,7 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
       await _modelService.deleteModel(model.id);
       await _loadModels();
 
+      // If the deleted model was the currently selected one, switch to default
       if (widget.selectedModel?.id == model.id) {
         final defaultModel = _models.where((m) => m.isDefault).firstOrNull;
         if (defaultModel != null) {
@@ -178,6 +180,7 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
           items: [
             ..._models.map((model) => DropdownMenuItem<String>(
               value: model.id,
+              // Wrapped in GestureDetector for long-press delete
               child: GestureDetector(
                 onLongPress: () => _showDeleteConfirmation(model),
                 child: Padding(
