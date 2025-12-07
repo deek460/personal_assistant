@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:permission_handler/permission_handler.dart'; // Import Permission Handler
 import '../../../../core/services/speech_to_text_service.dart';
 import '../../../../core/services/text_to_speech_service.dart';
 import '../../data/models/voice_chat_message.dart';
@@ -75,7 +76,7 @@ class VoiceCubit extends Cubit<VoiceState> {
   List<VoiceChatMessage> _chatHistory = [];
 
   Timer? _resetStateTimer;
-  static const Duration resetTimeout = Duration(milliseconds: 200); // Faster restart for invalid inputs
+  static const Duration resetTimeout = Duration(milliseconds: 200);
 
   bool _isManualStop = false;
 
@@ -90,9 +91,13 @@ class VoiceCubit extends Cubit<VoiceState> {
     emit(VoiceInitializing(_chatHistory));
 
     try {
+      // --- PERMISSION REQUEST BLOCK ---
+      await _requestStoragePermission();
+
+      // Initialize Gemma model
       bool gemmaInitialized = await _generateResponseUseCase.repository.initializeModel();
       if (!gemmaInitialized) {
-        emit(VoiceError('Failed to initialize AI model', _chatHistory));
+        emit(VoiceError('Failed to initialize AI model. Check permissions or file location.', _chatHistory));
         return;
       }
 
@@ -107,6 +112,22 @@ class VoiceCubit extends Cubit<VoiceState> {
     } catch (e) {
       emit(VoiceError('Initialization failed: $e', _chatHistory));
     }
+  }
+
+  Future<void> _requestStoragePermission() async {
+    // Android 11+ (API 30+) requires MANAGE_EXTERNAL_STORAGE for "All files access"
+    // to read arbitrary files in Downloads folder.
+    if (await Permission.manageExternalStorage.request().isGranted) {
+      return;
+    }
+
+    // Fallback for older Android versions
+    if (await Permission.storage.request().isGranted) {
+      return;
+    }
+
+    // If neither granted, print warning (app might fail to find model)
+    print("WARNING: Storage permissions denied. Model loading may fail.");
   }
 
   Future<void> startListening() async {
@@ -151,36 +172,25 @@ class VoiceCubit extends Cubit<VoiceState> {
 
     final String originalText = _lastRecognizedText.trim();
 
-    // 1. Check for Silence
     if (originalText.isEmpty) {
       _restartLoopImmediately();
       return;
     }
 
-    // 2. PSEUDO-WAKE WORD CHECK ("Jack")
-    // Normalize logic: check if text starts with "jack" (case insensitive)
     final bool hasWakeWord = originalText.toLowerCase().startsWith('jack');
 
     if (!hasWakeWord) {
       print('Ignored input (Missing "Jack"): $originalText');
-      // If we didn't hear "Jack", we ignore and restart listening immediately.
-      // We do NOT update UI history for ignored commands.
       _restartLoopImmediately();
       return;
     }
 
-    // 3. Process the Command (Strip "Jack")
-    // Remove "Jack" from the start (first 4 chars)
     String command = originalText.substring(4).trim();
-
-    // Clean leading punctuation (e.g., "Jack, tell me..." -> ", tell me..." -> "tell me...")
     command = command.replaceAll(RegExp(r'^[,.?!:\s]+'), '');
 
-    // 4. Check if Command is Empty (User just said "Jack")
     if (command.isEmpty) {
       print('User said only "Jack". Asking for input.');
 
-      // Update UI
       _chatHistory.add(VoiceChatMessage(
         id: DateTime.now().millisecondsSinceEpoch.toString(),
         text: "Jack",
@@ -189,9 +199,8 @@ class VoiceCubit extends Cubit<VoiceState> {
       ));
 
       const response = "Yes?";
-      emit(VoiceResponseReady("Jack", response, _chatHistory)); // Brief flash state
+      emit(VoiceResponseReady("Jack", response, _chatHistory));
 
-      // Speak "Yes?" and then listen again
       await _ttsService.speak(response);
       await _ttsService.waitForCompletion();
 
@@ -199,10 +208,6 @@ class VoiceCubit extends Cubit<VoiceState> {
       return;
     }
 
-    // --- PROCEED WITH VALID COMMAND ---
-
-    // Update history with the FULL recognized text (including Jack for context) or just command?
-    // Let's show full text "Jack, what is..." so user knows it was heard.
     _chatHistory.add(VoiceChatMessage(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       text: originalText,
@@ -213,7 +218,7 @@ class VoiceCubit extends Cubit<VoiceState> {
     emit(VoiceProcessing(originalText, _chatHistory));
 
     try {
-      await _generateStreamingResponse(command); // Pass only command to AI
+      await _generateStreamingResponse(command);
     } catch (e) {
       print('VoiceCubit: Error: $e');
       _handleErrorAndRestart();
@@ -221,7 +226,6 @@ class VoiceCubit extends Cubit<VoiceState> {
   }
 
   void _restartLoopImmediately() {
-    // Brief flicker to Idle to indicate reset, then start
     emit(VoiceIdle(_chatHistory));
     _resetStateTimer?.cancel();
     _resetStateTimer = Timer(resetTimeout, () async {
@@ -255,7 +259,6 @@ class VoiceCubit extends Cubit<VoiceState> {
         fullRawResponse += token;
         sentenceBuffer += token;
 
-        // Simultaneous TTS
         if (RegExp(r'[.?!:]').hasMatch(token) || RegExp(r'[.?!:]\s$').hasMatch(sentenceBuffer)) {
           if (sentenceBuffer.trim().length > 1) {
             final cleanSentence = TextFormatterService().formatForTTS(sentenceBuffer);
@@ -264,7 +267,6 @@ class VoiceCubit extends Cubit<VoiceState> {
           }
         }
 
-        // UI Update
         final streamingMessage = VoiceChatMessage(
           id: streamMessageId,
           text: fullRawResponse,
@@ -294,7 +296,6 @@ class VoiceCubit extends Cubit<VoiceState> {
         _ttsService.speak(fallback);
       }
 
-      // Finalize
       final formattedResponse = TextFormatterService().formatAIResponse(fullRawResponse);
       final finalMessage = VoiceChatMessage(
         id: streamMessageId,
