@@ -36,9 +36,21 @@ class ModelManagementService {
     await prefs.setString(_modelsKey, modelsJson);
   }
 
+  /// Adds a new model or updates an existing one if the ID matches.
   Future<void> addModel(AIModel model) async {
     final models = await getModels();
-    models.add(model);
+
+    // FIX: Check if model with same ID exists
+    final index = models.indexWhere((m) => m.id == model.id);
+
+    if (index != -1) {
+      // Update existing model (replace it)
+      models[index] = model;
+    } else {
+      // Add new model
+      models.add(model);
+    }
+
     await saveModels(models);
   }
 

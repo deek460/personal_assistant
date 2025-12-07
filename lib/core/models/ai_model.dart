@@ -5,12 +5,19 @@ class AIModel {
   final bool isDefault;
   final DateTime createdAt;
 
+  // NEW: Backend Preference Flag
+  // null = Unknown (Auto-detect)
+  // true = GPU
+  // false = CPU (Fallback mode)
+  final bool? isGpuSupported;
+
   AIModel({
     required this.id,
     required this.name,
     required this.address,
     this.isDefault = false,
     DateTime? createdAt,
+    this.isGpuSupported,
   }) : createdAt = createdAt ?? DateTime.now();
 
   AIModel copyWith({
@@ -19,6 +26,7 @@ class AIModel {
     String? address,
     bool? isDefault,
     DateTime? createdAt,
+    bool? isGpuSupported,
   }) {
     return AIModel(
       id: id ?? this.id,
@@ -26,6 +34,7 @@ class AIModel {
       address: address ?? this.address,
       isDefault: isDefault ?? this.isDefault,
       createdAt: createdAt ?? this.createdAt,
+      isGpuSupported: isGpuSupported ?? this.isGpuSupported,
     );
   }
 
@@ -36,6 +45,7 @@ class AIModel {
       'address': address,
       'isDefault': isDefault,
       'createdAt': createdAt.toIso8601String(),
+      'isGpuSupported': isGpuSupported,
     };
   }
 
@@ -46,6 +56,7 @@ class AIModel {
       address: json['address'],
       isDefault: json['isDefault'] ?? false,
       createdAt: DateTime.parse(json['createdAt']),
+      isGpuSupported: json['isGpuSupported'],
     );
   }
 }

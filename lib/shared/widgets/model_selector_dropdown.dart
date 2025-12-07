@@ -42,19 +42,23 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
 
     final models = await _modelService.getModels();
 
+    // SAFETY FIX: De-duplicate list in case storage has bad data
+    final uniqueModels = <String, AIModel>{};
+    for (var model in models) {
+      uniqueModels[model.id] = model;
+    }
+
     if (mounted) {
       setState(() {
-        _models = models;
+        _models = uniqueModels.values.toList();
         _isLoading = false;
       });
     }
   }
 
-  // New method to handle adding a model directly from dropdown
   Future<void> _handleAddModel() async {
     final nameController = TextEditingController();
 
-    // 1. Show Dialog to get Name
     final name = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
@@ -86,29 +90,15 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
       ),
     );
 
-    if (name == null) return; // User cancelled
+    if (name == null) return;
 
-    // 2. Trigger Cubit Browsing logic
     if (mounted) {
-      // Use the builder context from the parent or ensure this context can access cubit
-      // Since this widget is inside VoiceChatScreen which has the provider, this context should work
-      // if BlocProvider is above VoiceChatScreen.
-      // Wait, VoiceChatScreen wraps its body in BlocProvider.
-      // This widget is a child of VoiceChatScreen's body. So context.read<VoiceCubit>() works.
-
       final cubit = context.read<VoiceCubit>();
-
-      // Pass the name to the cubit's picking function
       final newModel = await cubit.pickAndAddModel(customName: name.isEmpty ? null : name);
 
       if (newModel != null) {
-        // 3. Update local list immediately
         await _loadModels();
-
-        // 4. Select the new model
         widget.onModelSelected(newModel);
-
-        // 5. Trigger switch in cubit (pickAndAddModel adds it but we want to ensure UI sync)
         cubit.switchModel(newModel);
       }
     }
@@ -148,7 +138,9 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
         final defaultModel = _models.where((m) => m.isDefault).firstOrNull;
         if (defaultModel != null) {
           widget.onModelSelected(defaultModel);
-          context.read<VoiceCubit>().switchModel(defaultModel);
+          if (mounted) {
+            context.read<VoiceCubit>().switchModel(defaultModel);
+          }
         }
       }
     }
@@ -163,8 +155,9 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
       );
     }
 
+    // Ensure currently selected model is valid for the dropdown
     String? dropdownValue = widget.selectedModel?.id;
-    if (_models.isNotEmpty && !_models.any((m) => m.id == dropdownValue)) {
+    if (_models.isEmpty || !_models.any((m) => m.id == dropdownValue)) {
       dropdownValue = null;
     }
 
@@ -182,9 +175,7 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
             padding: EdgeInsets.all(12),
             child: Text('Select Model'),
           ),
-          // Construct Items List
           items: [
-            // 1. Existing Models
             ..._models.map((model) => DropdownMenuItem<String>(
               value: model.id,
               child: GestureDetector(
@@ -234,7 +225,6 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
                 ),
               ),
             )),
-            // 2. Add Model Option
             const DropdownMenuItem<String>(
               value: 'ADD_NEW_MODEL',
               child: Padding(
@@ -259,7 +249,7 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
             if (value == 'ADD_NEW_MODEL') {
               await _handleAddModel();
             } else if (value != null) {
-              final selectedModel = _models.where((m) => m.id == value).first;
+              final selectedModel = _models.firstWhere((m) => m.id == value);
               await _modelService.setSelectedModelId(value);
               widget.onModelSelected(selectedModel);
             }

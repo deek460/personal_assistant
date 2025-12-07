@@ -39,6 +39,7 @@ dependencies:
   sound_stream: ^0.4.2
   flutter_markdown_plus: ^1.0.5
   file_picker: ^10.3.7
+  device_info_plus: ^12.3.0
 
   flutter:
     sdk: flutter
