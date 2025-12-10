@@ -40,7 +40,7 @@ dependencies:
   flutter_markdown_plus: ^1.0.5
   file_picker: ^10.3.7
   device_info_plus: ^12.3.0
-  sherpa_onnx: ^1.12.19
+  vosk_flutter: ^0.3.48
   record: ^6.1.2
 
   flutter:
