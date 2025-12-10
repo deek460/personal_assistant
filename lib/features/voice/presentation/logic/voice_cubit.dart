@@ -232,6 +232,11 @@ class VoiceCubit extends Cubit<VoiceState> {
 
   void _handleListeningComplete() async {
     if (_isManualStop) return;
+
+    // IMPORTANT: Pause listening immediately to prevent picking up self-speech
+    // or processing more audio while we handle the current command.
+    _speechService.pauseListening();
+
     final String originalText = _lastRecognizedText.trim();
     if (originalText.isEmpty) { _restartLoopImmediately(); return; }
     if (!originalText.toLowerCase().startsWith('jack')) { _restartLoopImmediately(); return; }
@@ -241,9 +246,11 @@ class VoiceCubit extends Cubit<VoiceState> {
     if (command.isEmpty) {
       _chatHistory.add(VoiceChatMessage(id: DateTime.now().toString(), text: "Jack", isUser: true, timestamp: DateTime.now()));
       emit(VoiceResponseReady("Jack", "Yes?", _chatHistory));
+
       await _ttsService.speak("Yes?");
       await _ttsService.waitForCompletion();
-      if (!_isManualStop) await startListening();
+
+      if (!_isManualStop) await startListening(); // This effectively resumes listening
       return;
     }
 
@@ -261,11 +268,16 @@ class VoiceCubit extends Cubit<VoiceState> {
   }
 
   void _handleErrorAndRestart() async {
+    // Ensure we are paused before speaking error
+    _speechService.pauseListening();
+
     String error = "I'm sorry, I encountered an error.";
     _chatHistory.add(VoiceChatMessage(id: DateTime.now().toString(), text: error, isUser: false, timestamp: DateTime.now()));
     emit(VoiceResponseReady("", error, _chatHistory));
+
     await _ttsService.speak(error);
     await _ttsService.waitForCompletion();
+
     if (!_isManualStop) await startListening();
   }
 
@@ -299,7 +311,11 @@ class VoiceCubit extends Cubit<VoiceState> {
 
       emit(VoiceResponseReady(inputText, formatted, _chatHistory));
       emit(VoiceSpeaking(formatted, _chatHistory));
+
       await _ttsService.waitForCompletion();
+
+      // Resume listening logic
+      _speechService.resumeListening();
       if (!_isManualStop) _restartLoopImmediately();
     } catch (e) { rethrow; }
   }

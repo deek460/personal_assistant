@@ -40,6 +40,8 @@ dependencies:
   flutter_markdown_plus: ^1.0.5
   file_picker: ^10.3.7
   device_info_plus: ^12.3.0
+  sherpa_onnx: ^1.12.19
+  record: ^6.1.2
 
   flutter:
     sdk: flutter
@@ -98,11 +100,13 @@ dev_dependencies:
 flutter:
 
   assets:
-      #- assets/models/
       - assets/images/
       - assets/images/icons/
       - assets/Assistant_en_android_v3_0_0.ppn
-      #- assets/models/gemma-3n-E2B-it-Q4_K_M.gguf  # Add this specific file
+      - assets/stt/decoder.onnx
+      - assets/stt/encoder.onnx
+      - assets/stt/joiner.onnx
+      - assets/stt/tokens.txt
 
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in
