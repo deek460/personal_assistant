@@ -15,7 +15,6 @@ class SpeechToTextService {
 
   bool _isAvailable = false;
   bool _isListening = false;
-  bool _isPaused = false; // Paused state to ignore audio during TTS
 
   // Callbacks
   Function(String)? _onResult;
@@ -46,13 +45,13 @@ class SpeechToTextService {
       final decoderPath = '$modelDir/decoder.int8.onnx';
       final joinerPath = '$modelDir/joiner.int8.onnx';
 
-      // Verify files exist before passing to C++
+      // Double check files exist
       if (!File(tokensPath).existsSync()) {
         print('❌ Critical Error: tokens.txt not found at $tokensPath');
         return false;
       }
 
-      // 1. Create Model Config
+      // CONFIGURATION
       final modelConfig = sherpa_onnx.OnlineModelConfig(
         transducer: sherpa_onnx.OnlineTransducerModelConfig(
           encoder: encoderPath,
@@ -62,19 +61,13 @@ class SpeechToTextService {
         tokens: tokensPath,
         numThreads: 1,
         provider: 'cpu',
-        debug: true, // Enable debug to get more info on crashes
-        // REMOVED: modelType: 'zipformer'
-        // Letting Sherpa auto-detect or default for NeMo/Conformer models
+        debug: true, // Enable debug to see C++ logs
+        modelType: 'zipformer2',
       );
 
-      // 2. Create Recognizer Config
       final config = sherpa_onnx.OnlineRecognizerConfig(
         model: modelConfig,
         ruleFsts: '',
-        enableEndpoint: true, // Auto-detect silence
-        rule1MinTrailingSilence: 2.4,
-        rule2MinTrailingSilence: 1.2,
-        rule3MinUtteranceLength: 20.0,
       );
 
       _recognizer = sherpa_onnx.OnlineRecognizer(config);
@@ -91,23 +84,22 @@ class SpeechToTextService {
 
   Future<String?> _copyModelAssets() async {
     try {
-      // FIX: Use ApplicationDocumentsDirectory for stable native access
-      final docsDir = await getApplicationDocumentsDirectory();
-      final modelPath = '${docsDir.path}/sherpa_model';
+      // Use TemporaryDirectory instead of ApplicationDocumentsDirectory
+      // This is often safer for passing paths to C++ libs
+      final tempDir = await getTemporaryDirectory();
+      final modelPath = '${tempDir.path}/sherpa_model';
       final dir = Directory(modelPath);
 
       if (await dir.exists()) {
-        // Check for key files to ensure integrity
-        if (File('$modelPath/tokens.txt').existsSync() &&
-            File('$modelPath/encoder.int8.onnx').existsSync()) {
-          print('📂 Model directory exists: $modelPath');
-          return modelPath;
-        }
+        // Optional: Delete and recreate to ensure fresh assets during dev
+        // await dir.delete(recursive: true);
+        print('📂 Model directory exists: $modelPath');
+        return modelPath;
       }
 
       await dir.create(recursive: true);
 
-      // Updated to match your file structure: assets/stt/
+      // Matches your file structure: assets/stt/
       const assetPrefix = 'assets/stt';
 
       final files = [
@@ -148,13 +140,6 @@ class SpeechToTextService {
 
     _onResult = onResult;
     _onSessionComplete = onSessionComplete;
-    _isPaused = false; // Ensure we start unpaused
-
-    if (_isListening) {
-      print('🎤 Already listening, resumed processing.');
-      return;
-    }
-
     _isListening = true;
 
     try {
@@ -168,48 +153,33 @@ class SpeechToTextService {
           numChannels: 1,
         );
 
-        // Start stream
         final stream = await _audioRecorder.startStream(config);
 
         stream.listen((data) {
-          // --- PAUSE LOGIC: Ignore data if speaking ---
-          if (!_isListening || _isPaused) return;
-
           final samplesFloat32 = _convertBytesToFloat32(Uint8List.fromList(data));
 
-          _stream?.acceptWaveform(
+          _stream!.acceptWaveform(
               samples: samplesFloat32,
               sampleRate: 16000
           );
 
-          // Decode loop
-          while (_recognizer != null && _stream != null && _recognizer!.isReady(_stream!)) {
+          while (_recognizer!.isReady(_stream!)) {
             _recognizer!.decode(_stream!);
           }
 
-          if (_recognizer != null && _stream != null) {
-            final result = _recognizer!.getResult(_stream!);
-            // Send partial results
+          final result = _recognizer!.getResult(_stream!);
+          if (result.text.isNotEmpty) {
+            _onResult?.call(result.text);
+          }
+
+          if (_recognizer!.isEndpoint(_stream!)) {
+            _recognizer!.reset(_stream!);
             if (result.text.isNotEmpty) {
-              _onResult?.call(result.text);
-            }
-
-            // Check for silence (Endpoint)
-            if (_recognizer!.isEndpoint(_stream!)) {
-              _recognizer!.reset(_stream!);
-              if (result.text.isNotEmpty) {
-                print("✅ Endpoint detected (Silence). Pausing listening to process command.");
-
-                // Auto-pause to prevent capturing self-noise immediately
-                pauseListening();
-
-                _onSessionComplete?.call();
-              }
+              _onSessionComplete?.call();
             }
           }
         }, onDone: () {
           print('Audio stream stopped.');
-          _isListening = false;
         });
 
         print('🎤 Sherpa listening...');
@@ -223,23 +193,6 @@ class SpeechToTextService {
     }
   }
 
-  // --- CONTROL METHODS ---
-
-  void pauseListening() {
-    _isPaused = true;
-    if (_stream != null && _recognizer != null) {
-      _recognizer!.reset(_stream!);
-    }
-    print("⏸️ Microphone input PAUSED");
-  }
-
-  void resumeListening() {
-    _isPaused = false;
-    print("▶️ Microphone input RESUMED");
-  }
-
-  // ---------------------------
-
   Float32List _convertBytesToFloat32(Uint8List bytes) {
     final int16List = Int16List.view(bytes.buffer);
     final float32List = Float32List(int16List.length);
@@ -251,11 +204,10 @@ class SpeechToTextService {
 
   Future<void> stopListening() async {
     _isListening = false;
-    _isPaused = false;
     await _audioRecorder.stop();
     _stream?.free();
     _stream = null;
-    print('🛑 Stopped listening (Input Closed)');
+    print('Stopped listening');
   }
 
   bool get isListening => _isListening;

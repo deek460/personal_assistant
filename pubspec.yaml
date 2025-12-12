@@ -40,7 +40,7 @@ dependencies:
   flutter_markdown_plus: ^1.0.5
   file_picker: ^10.3.7
   device_info_plus: ^12.3.0
-  vosk_flutter: ^0.3.48
+  sherpa_onnx: ^1.12.19
   record: ^6.1.2
 
   flutter:
@@ -103,9 +103,9 @@ flutter:
       - assets/images/
       - assets/images/icons/
       - assets/Assistant_en_android_v3_0_0.ppn
-      - assets/stt/decoder.onnx
-      - assets/stt/encoder.onnx
-      - assets/stt/joiner.onnx
+      - assets/stt/decoder.int8.onnx
+      - assets/stt/encoder.int8.onnx
+      - assets/stt/joiner.int8.onnx
       - assets/stt/tokens.txt
 
   # The following line ensures that the Material Icons font is
