@@ -275,33 +275,64 @@ class VoiceCubit extends Cubit<VoiceState> {
     final streamMessageId = 'stream_${DateTime.now().millisecondsSinceEpoch}';
 
     try {
+      // *** CRITICAL: Stop listening BEFORE starting TTS ***
+      await _speechService.stopListening();
+
       await for (String token in _generateResponseUseCase.callStreaming(inputText)) {
         if (_isManualStop) break;
         fullRawResponse += token;
         sentenceBuffer += token;
+
         if (RegExp(r'[.?!:]').hasMatch(token) || RegExp(r'[.?!:]\s$').hasMatch(sentenceBuffer)) {
           if (sentenceBuffer.trim().length > 1) {
             _ttsService.speak(TextFormatterService().formatForTTS(sentenceBuffer));
             sentenceBuffer = '';
           }
         }
-        final msg = VoiceChatMessage(id: streamMessageId, text: fullRawResponse, rawContent: fullRawResponse, isUser: false, timestamp: DateTime.now());
+
+        final msg = VoiceChatMessage(
+            id: streamMessageId,
+            text: fullRawResponse,
+            rawContent: fullRawResponse,
+            isUser: false,
+            timestamp: DateTime.now()
+        );
         emit(VoiceStreamingResponse(inputText, fullRawResponse, false, [..._chatHistory, msg]));
       }
 
       if (_isManualStop) return;
-      if (sentenceBuffer.trim().isNotEmpty) _ttsService.speak(TextFormatterService().formatForTTS(sentenceBuffer));
-      if (fullRawResponse.trim().isEmpty) _ttsService.speak("I didn't quite catch that.");
+
+      if (sentenceBuffer.trim().isNotEmpty) {
+        _ttsService.speak(TextFormatterService().formatForTTS(sentenceBuffer));
+      }
+      if (fullRawResponse.trim().isEmpty) {
+        _ttsService.speak("I didn't quite catch that.");
+      }
 
       final formatted = TextFormatterService().formatAIResponse(fullRawResponse);
-      final finalMsg = VoiceChatMessage(id: streamMessageId, text: formatted, rawContent: fullRawResponse, formattedContent: formatted, isUser: false, timestamp: DateTime.now());
+      final finalMsg = VoiceChatMessage(
+          id: streamMessageId,
+          text: formatted,
+          rawContent: fullRawResponse,
+          formattedContent: formatted,
+          isUser: false,
+          timestamp: DateTime.now()
+      );
       _chatHistory.add(finalMsg);
 
       emit(VoiceResponseReady(inputText, formatted, _chatHistory));
       emit(VoiceSpeaking(formatted, _chatHistory));
+
+      // *** CRITICAL: Wait for TTS to complete BEFORE restarting listening ***
       await _ttsService.waitForCompletion();
+
+      // Add a small delay to ensure audio pipeline is clear
+      await Future.delayed(const Duration(milliseconds: 500));
+
       if (!_isManualStop) _restartLoopImmediately();
-    } catch (e) { rethrow; }
+    } catch (e) {
+      rethrow;
+    }
   }
 
   @override
