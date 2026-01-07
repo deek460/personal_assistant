@@ -62,7 +62,7 @@ class SpeechToTextService {
         numThreads: 1,
         provider: 'cpu',
         debug: true, // Enable debug to see C++ logs
-        modelType: 'zipformer2',
+        modelType: 'zipformer',
       );
 
       final config = sherpa_onnx.OnlineRecognizerConfig(
