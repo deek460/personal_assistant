@@ -1,21 +1,22 @@
 class VoiceChatMessage {
   final String id;
   final String text;
-  final String? rawContent;     // Add this field
-  final String? formattedContent; // Add this field
+  final String? rawContent;
+  final String? formattedContent;
   final bool isUser;
   final DateTime timestamp;
+  final Duration? latency; // NEW: Field to store response time
 
   VoiceChatMessage({
     required this.id,
     required this.text,
-    this.rawContent,           // Add this parameter
-    this.formattedContent,     // Add this parameter
+    this.rawContent,
+    this.formattedContent,
     required this.isUser,
     required this.timestamp,
+    this.latency,
   });
 
-  // Update copyWith method if you have one
   VoiceChatMessage copyWith({
     String? id,
     String? text,
@@ -23,6 +24,7 @@ class VoiceChatMessage {
     String? formattedContent,
     bool? isUser,
     DateTime? timestamp,
+    Duration? latency,
   }) {
     return VoiceChatMessage(
       id: id ?? this.id,
@@ -31,10 +33,10 @@ class VoiceChatMessage {
       formattedContent: formattedContent ?? this.formattedContent,
       isUser: isUser ?? this.isUser,
       timestamp: timestamp ?? this.timestamp,
+      latency: latency ?? this.latency,
     );
   }
 
-  // Update toJson/fromJson if you have serialization
   Map<String, dynamic> toJson() {
     return {
       'id': id,
@@ -43,6 +45,7 @@ class VoiceChatMessage {
       'formattedContent': formattedContent,
       'isUser': isUser,
       'timestamp': timestamp.toIso8601String(),
+      'latency': latency?.inMilliseconds, // Store as ms
     };
   }
 
@@ -54,6 +57,9 @@ class VoiceChatMessage {
       formattedContent: json['formattedContent'],
       isUser: json['isUser'],
       timestamp: DateTime.parse(json['timestamp']),
+      latency: json['latency'] != null
+          ? Duration(milliseconds: json['latency'])
+          : null,
     );
   }
 }

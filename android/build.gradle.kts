@@ -23,11 +23,13 @@ tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
 }
 
-//plugins {
+plugins {
 //    id("com.android.application")
 //    id("org.jetbrains.kotlin.android") // Keep this if you're using Kotlin for native Android code
 //    //id("dev.flutter.flutter-gradle-plugin") // Add this line
-//}
+    id("com.google.gms.google-services") version "4.3.15" apply false
+    //id("com.google.firebase:perf-plugin") version "1.4.2" apply false
+}
 //
 //allprojects {
 //    repositories {

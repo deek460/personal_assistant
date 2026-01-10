@@ -12,7 +12,7 @@ import '../../../gemma_integration/domain/usecases/generate_response_usecase.dar
 import '../../../../core/services/text_formatter_service.dart';
 import '../../../../core/models/ai_model.dart';
 import '../../../../core/services/model_management_service.dart';
-
+import 'package:firebase_performance/firebase_performance.dart';
 
 abstract class VoiceState {
   final List<VoiceChatMessage> chatHistory;
@@ -73,6 +73,26 @@ class VoiceCubit extends Cubit<VoiceState> {
       this._generateResponseUseCase,
       ) : super(VoiceInitial());
 
+  Future<void> processTextCommand(String command) async {
+    print("VoiceCubit: Processing injected command: $command");
+
+    // Add User Message
+    _chatHistory.add(VoiceChatMessage(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      text: command,
+      isUser: true,
+      timestamp: DateTime.now(),
+    ));
+    emit(VoiceProcessing(command, _chatHistory));
+
+    try {
+      await _generateStreamingResponse(command);
+    } catch (e) {
+      _handleErrorAndRestart();
+    }
+  }
+
+  // ... (initializeServices, switchModel, pickAndAddModel, permissions remain the same) ...
   Future<void> initializeServices({AIModel? specificModel}) async {
     emit(VoiceInitializing(_chatHistory, message: "Checking permissions..."));
 
@@ -80,20 +100,15 @@ class VoiceCubit extends Cubit<VoiceState> {
       await _requestStoragePermission();
 
       AIModel? modelToLoad = specificModel;
-      if (modelToLoad == null) {
-        modelToLoad = await _modelManagementService.getSelectedModel();
-      }
+      modelToLoad ??= await _modelManagementService.getSelectedModel();
 
-      // --- CRASH RECOVERY LOGIC ---
       final prefs = await SharedPreferences.getInstance();
       final bool hasCrashed = prefs.getBool('gpu_init_crash_marker') ?? false;
 
       if (hasCrashed && modelToLoad != null) {
         print("🚨 Detected previous native crash. Marking model '${modelToLoad.name}' as CPU Only.");
-
         modelToLoad = modelToLoad.copyWith(isGpuSupported: false);
         await _modelManagementService.addModel(modelToLoad);
-
         await prefs.setBool('gpu_init_crash_marker', false);
       }
 
@@ -105,8 +120,6 @@ class VoiceCubit extends Cubit<VoiceState> {
 
       bool forceCpu = modelToLoad?.isGpuSupported == false;
 
-      // We need to cast the repository to GemmaRepositoryImpl to access the extended initializeModel with forceCpu
-      // Or update the interface. Assuming interface update:
       bool gemmaInitialized = await (_generateResponseUseCase.repository as GemmaRepositoryImpl).initializeModel(
           modelPath: modelToLoad?.address,
           forceCpu: forceCpu
@@ -121,7 +134,6 @@ class VoiceCubit extends Cubit<VoiceState> {
       bool actuallyUsedGpu = repoImpl.isUsingGpu;
 
       if (modelToLoad != null && modelToLoad.isGpuSupported != actuallyUsedGpu) {
-        print("🧠 Testing Complete: Model '${modelToLoad.name}' uses GPU? $actuallyUsedGpu");
         final updatedModel = modelToLoad.copyWith(isGpuSupported: actuallyUsedGpu);
         await _modelManagementService.addModel(updatedModel);
       }
@@ -141,19 +153,13 @@ class VoiceCubit extends Cubit<VoiceState> {
   }
 
   Future<void> switchModel(AIModel model) async {
-    print("Switching to model: ${model.name}");
-
     _isManualStop = true;
     _resetStateTimer?.cancel();
     await _speechService.stopListening();
     await _ttsService.stop();
-
     await Future.delayed(const Duration(milliseconds: 500));
-
     await _modelManagementService.setSelectedModelId(model.id);
-
     _isManualStop = false;
-
     await initializeServices(specificModel: model);
   }
 
@@ -163,7 +169,6 @@ class VoiceCubit extends Cubit<VoiceState> {
       if (result != null && result.files.single.path != null) {
         String path = result.files.single.path!;
         String fileName = result.files.single.name;
-
         final newModel = AIModel(
           id: 'custom-${DateTime.now().millisecondsSinceEpoch}',
           name: customName ?? fileName,
@@ -171,7 +176,6 @@ class VoiceCubit extends Cubit<VoiceState> {
           isDefault: false,
           isGpuSupported: null,
         );
-
         await _modelManagementService.addModel(newModel);
         return newModel;
       }
@@ -204,7 +208,6 @@ class VoiceCubit extends Cubit<VoiceState> {
     );
   }
 
-  // Missing Method 1: stopListening
   Future<void> stopListening() async {
     _isManualStop = true;
     _resetStateTimer?.cancel();
@@ -213,19 +216,16 @@ class VoiceCubit extends Cubit<VoiceState> {
     emit(VoiceIdle(_chatHistory));
   }
 
-  // Missing Method 2: stopSpeaking
   Future<void> stopSpeaking() async {
     _isManualStop = true;
     await _ttsService.stop();
     emit(VoiceIdle(_chatHistory));
   }
 
-  // Missing Method 3: restartListening
   Future<void> restartListening() async {
     await startListening();
   }
 
-  // Missing Method 4: clearChatHistory
   void clearChatHistory() {
     _chatHistory.clear();
     emit(VoiceIdle(_chatHistory));
@@ -233,6 +233,9 @@ class VoiceCubit extends Cubit<VoiceState> {
 
   void _handleListeningComplete() async {
     if (_isManualStop) return;
+
+    _speechService.pauseListening();
+
     final String originalText = _lastRecognizedText.trim();
     if (originalText.isEmpty) { _restartLoopImmediately(); return; }
     if (!originalText.toLowerCase().startsWith('jack')) { _restartLoopImmediately(); return; }
@@ -262,6 +265,7 @@ class VoiceCubit extends Cubit<VoiceState> {
   }
 
   void _handleErrorAndRestart() async {
+    _speechService.pauseListening();
     String error = "I'm sorry, I encountered an error.";
     _chatHistory.add(VoiceChatMessage(id: DateTime.now().toString(), text: error, isUser: false, timestamp: DateTime.now()));
     emit(VoiceResponseReady("", error, _chatHistory));
@@ -275,15 +279,33 @@ class VoiceCubit extends Cubit<VoiceState> {
     String sentenceBuffer = '';
     final streamMessageId = 'stream_${DateTime.now().millisecondsSinceEpoch}';
 
-    try {
-      // *** CRITICAL: Stop listening BEFORE starting TTS ***
-      await _speechService.stopListening();
+    final trace = FirebasePerformance.instance.newTrace('ai_response_generation');
+    await trace.start();
 
+    // Add useful attributes for filtering in console
+    final repo = _generateResponseUseCase.repository as GemmaRepositoryImpl;
+    trace.putAttribute('backend_type', repo.isUsingGpu ? 'GPU' : 'CPU');
+    trace.putAttribute('input_length', inputText.length.toString());
+
+    // --- LATENCY TRACKING ---
+    final DateTime startTime = DateTime.now();
+    Duration? firstTokenLatency;
+
+    try {
       await for (String token in _generateResponseUseCase.callStreaming(inputText)) {
         if (_isManualStop) break;
+
+        // Calculate latency on FIRST token
+        // Calculate latency on FIRST token
+        if (firstTokenLatency == null) {
+          firstTokenLatency = DateTime.now().difference(startTime);
+
+          // 2. LOG TIME TO FIRST TOKEN (TTFT) METRIC
+          trace.setMetric('time_to_first_token_ms', firstTokenLatency.inMilliseconds);
+        }
+
         fullRawResponse += token;
         sentenceBuffer += token;
-
         if (RegExp(r'[.?!:]').hasMatch(token) || RegExp(r'[.?!:]\s$').hasMatch(sentenceBuffer)) {
           if (sentenceBuffer.trim().length > 1) {
             _ttsService.speak(TextFormatterService().formatForTTS(sentenceBuffer));
@@ -292,48 +314,46 @@ class VoiceCubit extends Cubit<VoiceState> {
         }
 
         final msg = VoiceChatMessage(
-            id: streamMessageId,
-            text: fullRawResponse,
-            rawContent: fullRawResponse,
-            isUser: false,
-            timestamp: DateTime.now()
+          id: streamMessageId,
+          text: fullRawResponse,
+          rawContent: fullRawResponse,
+          isUser: false,
+          timestamp: DateTime.now(),
+          latency: firstTokenLatency, // Pass latency
         );
         emit(VoiceStreamingResponse(inputText, fullRawResponse, false, [..._chatHistory, msg]));
       }
 
       if (_isManualStop) return;
-
-      if (sentenceBuffer.trim().isNotEmpty) {
-        _ttsService.speak(TextFormatterService().formatForTTS(sentenceBuffer));
-      }
-      if (fullRawResponse.trim().isEmpty) {
-        _ttsService.speak("I didn't quite catch that.");
-      }
+      if (sentenceBuffer.trim().isNotEmpty) _ttsService.speak(TextFormatterService().formatForTTS(sentenceBuffer));
+      if (fullRawResponse.trim().isEmpty) _ttsService.speak("I didn't quite catch that.");
 
       final formatted = TextFormatterService().formatAIResponse(fullRawResponse);
       final finalMsg = VoiceChatMessage(
-          id: streamMessageId,
-          text: formatted,
-          rawContent: fullRawResponse,
-          formattedContent: formatted,
-          isUser: false,
-          timestamp: DateTime.now()
+        id: streamMessageId,
+        text: formatted,
+        rawContent: fullRawResponse,
+        formattedContent: formatted,
+        isUser: false,
+        timestamp: DateTime.now(),
+        latency: firstTokenLatency, // Pass final latency
       );
       _chatHistory.add(finalMsg);
+
+      // 3. LOG TOTAL TOKENS & STOP TRACE
+      // Estimate token count roughly by spaces or char count / 4
+      trace.setMetric('response_char_count', fullRawResponse.length);
+      trace.putAttribute('status', 'success');
+      await trace.stop();
 
       emit(VoiceResponseReady(inputText, formatted, _chatHistory));
       emit(VoiceSpeaking(formatted, _chatHistory));
 
-      // *** CRITICAL: Wait for TTS to complete BEFORE restarting listening ***
       await _ttsService.waitForCompletion();
 
-      // Add a small delay to ensure audio pipeline is clear
-      await Future.delayed(const Duration(milliseconds: 500));
-
+      _speechService.resumeListening();
       if (!_isManualStop) _restartLoopImmediately();
-    } catch (e) {
-      rethrow;
-    }
+    } catch (e) { rethrow; }
   }
 
   @override

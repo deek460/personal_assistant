@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart'; // For kDebugMode
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
@@ -23,6 +24,7 @@ class VoiceChatScreen extends StatefulWidget {
 class _VoiceChatScreenState extends State<VoiceChatScreen> {
   final ModelManagementService _modelService = ModelManagementService();
   final ScrollController _scrollController = ScrollController();
+  final TextEditingController _debugInputController = TextEditingController(); // For debug input
   AIModel? _selectedModel;
 
   @override
@@ -34,6 +36,7 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
   @override
   void dispose() {
     _scrollController.dispose();
+    _debugInputController.dispose();
     super.dispose();
   }
 
@@ -99,12 +102,54 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                             },
                           ),
                         ),
-                        // Removed the external "Add Model" button
                       ],
                     ),
                   ),
 
                   Expanded(child: _VoiceChatBody(scrollController: _scrollController)),
+
+                  // --- DEBUG INPUT FIELD (Visible in Debug Mode or Testing) ---
+                  // We use kDebugMode check, or you can use a custom flag.
+                  // Since integration tests run in a mode that might be profile/release on Firebase,
+                  // it's safer to always show it if a specific environment var is set,
+                  // OR just leave it visible but small for now during development.
+                  // For this request, I will make it visible.
+                  Container(
+                    color: Colors.grey.shade100,
+                    padding: const EdgeInsets.all(8.0),
+                    child: Row(
+                      children: [
+                        const Text("Debug:", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: TextField(
+                            key: const Key('debug_input'),
+                            controller: _debugInputController,
+                            decoration: const InputDecoration(
+                              hintText: "Inject Text Command",
+                              border: OutlineInputBorder(),
+                              contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          key: const Key('debug_send'),
+                          icon: const Icon(Icons.send, color: Colors.blue),
+                          onPressed: () {
+                            if (_debugInputController.text.isNotEmpty) {
+                              // Inject text into the logic
+                              // We need to access the private method _generateStreamingResponse ideally,
+                              // or expose a public method for text input in VoiceCubit.
+                              // Since _generateStreamingResponse is private, we will add a public wrapper in VoiceCubit.
+                              // Assuming VoiceCubit has a method 'processTextCommand' (I will add it below).
+                              context.read<VoiceCubit>().processTextCommand(_debugInputController.text);
+                              _debugInputController.clear();
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
                 ],
               ),
             );
