@@ -114,6 +114,7 @@ flutter:
       - assets/stt/joiner.int8.onnx
       - assets/stt/tokens.txt
       - assets/test_data/
+      - assets/models/
 
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in

@@ -2,6 +2,7 @@ import 'package:flutter_gemma/flutter_gemma.dart';
 import 'package:flutter_gemma/core/model.dart';
 import 'package:flutter_gemma/pigeon.g.dart';
 import 'dart:io';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:device_info_plus/device_info_plus.dart';
@@ -14,6 +15,10 @@ class GemmaRepositoryImpl implements GemmaRepository {
 
   PreferredBackend _currentBackend = PreferredBackend.gpu;
   static const String _crashMarkerKey = 'gpu_init_crash_marker';
+
+  // REPLACE THIS WITH YOUR ACTUAL DIRECT DOWNLOAD LINK
+  static const String _modelDownloadUrl = 'https://drive.google.com/uc?export=download&id=1MXmjyrgLfl4tzohzyhstYe_7ZCuCTUHb';
+  // Note: The above is a placeholder. You MUST use a link to your specific .task file.
 
   @override
   bool get isModelLoaded => _isModelLoaded;
@@ -87,7 +92,6 @@ class GemmaRepositoryImpl implements GemmaRepository {
       if (modelPath != null && modelPath.isNotEmpty) {
         if (modelPath.startsWith('local://')) {
           final cleanPath = modelPath.replaceFirst('local://', '');
-
           if (File(cleanPath).existsSync()) {
             finalPath = cleanPath;
           }
@@ -99,11 +103,11 @@ class GemmaRepositoryImpl implements GemmaRepository {
       }
 
       if (finalPath == null) {
-        finalPath = await _findModelFile();
+        finalPath = await _prepareModelFile();
       }
 
       if (finalPath == null) {
-        print('❌ Model file not found. Ensure model is in Downloads folder.');
+        print('❌ Model file could not be prepared (Download failed?).');
         return false;
       }
 
@@ -136,24 +140,38 @@ class GemmaRepositoryImpl implements GemmaRepository {
     }
   }
 
-  Future<String?> _findModelFile() async {
-    final possiblePaths = [
-      '/storage/emulated/0/Download/gemma3-1B-it-int4.task',
-      '/storage/emulated/0/Downloads/gemma3-1B-it-int4.task',
-      '/storage/emulated/0/Documents/gemma3-1B-it-int4.task',
-      '/storage/emulated/0/gemma3-1B-it-int4.task',
-    ];
+  // UPDATED: Downloads model if missing
+  Future<String?> _prepareModelFile() async {
+    try {
+      final docsDir = await getApplicationDocumentsDirectory();
+      // Filename
+      const fileName = 'gemma_model.task';
+      final File destFile = File('${docsDir.path}/$fileName');
 
-    for (String path in possiblePaths) {
-      final file = File(path);
-      if (file.existsSync()) {
-        try {
-          final isReadable = await file.stat().then((stat) => stat.size > 0);
-          if (isReadable) return path;
-        } catch (e) { /* ignore */ }
+      if (await destFile.exists()) {
+        print('✅ Model found locally at: ${destFile.path}');
+        return destFile.path;
       }
+
+      print('⬇️ Model not found. Starting download from $_modelDownloadUrl...');
+
+      final request = await HttpClient().getUrl(Uri.parse(_modelDownloadUrl));
+      final response = await request.close();
+
+      if (response.statusCode == 200) {
+        final IOSink sink = destFile.openWrite();
+        await response.pipe(sink);
+        await sink.close();
+        print('✅ Download complete: ${destFile.path}');
+        return destFile.path;
+      } else {
+        print('❌ Download failed with status: ${response.statusCode}');
+        return null;
+      }
+    } catch (e) {
+      print('❌ Error preparing model file: $e');
+      return null;
     }
-    return null;
   }
 
   @override
@@ -176,20 +194,8 @@ class GemmaRepositoryImpl implements GemmaRepository {
       final formattedPrompt = _formatPrompt(prompt);
       await session.addQueryChunk(Message.text(text: formattedPrompt, isUser: true));
 
-      int garbageTokenCount = 0;
-
       await for (String token in session.getResponseAsync()) {
         final cleanToken = token.trim();
-
-        if (cleanToken.contains('<unused')) {
-          garbageTokenCount++;
-          if (garbageTokenCount > 5) {
-            yield "I'm having trouble processing that on this device.";
-            break;
-          }
-          continue;
-        }
-
         if (cleanToken.isNotEmpty &&
             !cleanToken.contains('<end_of_turn>') &&
             !cleanToken.contains('<start_of_turn>') &&
@@ -216,15 +222,10 @@ IMPORTANT: Keep your response short, concise, and to the point. Do not give long
 
   @override
   Future<void> disposeModel() async {
-    try {
-      if (_inferenceModel != null) {
-        await _inferenceModel!.close();
-        _inferenceModel = null;
-        _isModelLoaded = false;
-        print('🤖 Real Gemma model closed/disposed');
-      }
-    } catch (e) {
-      print('❌ Error closing Gemma model: $e');
+    if (_inferenceModel != null) {
+      await _inferenceModel!.close();
+      _inferenceModel = null;
+      _isModelLoaded = false;
     }
   }
 }

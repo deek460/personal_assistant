@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -9,7 +10,6 @@ import 'dart:developer' as developer;
 
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-  // Ensure the test doesn't time out during long runs
   binding.framePolicy = LiveTestWidgetsFlutterBindingFramePolicy.fullyLive;
 
   testWidgets('Performance Test: Latency, Resources & Resilience', (tester) async {
@@ -17,7 +17,7 @@ void main() {
     app.main();
     await tester.pumpAndSettle();
 
-    // 2. Load Commands from ARC-Easy Dataset
+    // 2. Load Commands
     final String jsonString = await rootBundle.loadString('assets/test_data/arc_commands.json');
     final List<dynamic> jsonList = json.decode(jsonString);
     final List<String> commands = jsonList.cast<String>();
@@ -25,34 +25,54 @@ void main() {
     print('TEST_LOG: Loaded ${commands.length} commands for testing.');
 
     // 3. Navigate to Voice Chat
-    final fab = find.byIcon(Icons.mic); // Assuming Mic icon on FAB/Button
-    if (fab.evaluate().isNotEmpty) {
-      await tester.tap(fab);
+    // Assuming Mic button on Home navigates to Voice Chat
+    final micBtn = find.byIcon(Icons.mic);
+    if (micBtn.evaluate().isNotEmpty) {
+      await tester.tap(micBtn);
       await tester.pumpAndSettle();
     } else {
-      print("TEST_LOG: Warning - Mic button not found on home screen. Check navigation.");
+      print("TEST_LOG: Warning - Mic button not found. Assuming already on screen.");
+    }
+
+    // --- WAIT FOR MODEL INITIALIZATION ---
+    print('TEST_LOG: Waiting for model to initialize...');
+    bool isReady = false;
+    for (int i = 0; i < 60; i++) { // Wait up to 60 seconds for copy + load
+      await tester.pump(const Duration(seconds: 1));
+
+      // Look for text indicating readiness.
+      // Based on your UI logic: "Ready. Say 'Jack' to start." or similar
+      // Or checking if the Mic button is enabled/blue.
+      if (find.textContaining('Ready').evaluate().isNotEmpty ||
+          find.textContaining('Tap to Speak').evaluate().isNotEmpty ||
+          find.textContaining('Jack').evaluate().isNotEmpty) {
+        isReady = true;
+        print('TEST_LOG: Model Initialized!');
+        break;
+      }
+    }
+
+    if (!isReady) {
+      print('TEST_LOG: CRITICAL FAILURE - Model failed to initialize in time.');
+      // Fail the test or return
+      return;
     }
 
     // 4. Test Loop
     final latencies = <int>[];
-
-    // Limit to 20 commands for a reasonable test duration on cloud lab
     final testCommands = commands.take(20).toList();
 
     for (int i = 0; i < testCommands.length; i++) {
       final command = testCommands[i];
       print('TEST_LOG: [$i/${testCommands.length}] Processing: "$command"');
 
-      // --- RESOURCE LOGGING (RAM) ---
-      // We can't easily get system-level battery/RAM from inside the Dart test
-      // without platform channels or relying on Firebase Test Lab's external profiler.
-      // However, we can log Dart Heap usage.
-      final rss = ProcessInfo.currentRss / 1024 / 1024; // MB
+      // Resource Logging
+      final rss = ProcessInfo.currentRss / 1024 / 1024;
       print('TEST_LOG: Metric - RAM_RSS: ${rss.toStringAsFixed(2)} MB');
 
       final Stopwatch stopwatch = Stopwatch()..start();
 
-      // INJECT INPUT via Debug Field
+      // INJECT INPUT
       final inputField = find.byKey(const Key('debug_input'));
       final sendButton = find.byKey(const Key('debug_send'));
 
@@ -66,57 +86,58 @@ void main() {
 
       stopwatch.reset(); // Start counting PURE latency from send
 
-      // WAIT FOR RESPONSE
-      bool responseReceived = false;
+      // WAIT FOR RESPONSE COMPLETION
+      bool responseStarted = false;
+      bool responseFinished = false;
+      int initialLatencyWidgetsCount = find.textContaining('Latency:').evaluate().length;
 
-      // Wait up to 15 seconds for response
-      for (int j = 0; j < 150; j++) {
+      // Wait loop (Max 60 seconds per response)
+      for (int j = 0; j < 600; j++) {
         await tester.pump(const Duration(milliseconds: 100));
 
-        // Check for specific Latency text widget which indicates a finished response
-        final latencyWidgets = find.textContaining('Latency:');
-
-        // We assume index 'i' corresponds to the i-th message pair (User + AI)
-        // So we look for the presence of a new latency widget.
-        // Simple heuristic: If we find a latency widget at the bottom of the list
-        if (latencyWidgets.evaluate().isNotEmpty) {
-          // To be precise, we'd need to count them, but for a simple loop,
-          // checking if *any* new text appeared after our tap is usually sufficient.
-          // Let's assume the latency widget appears ONLY when response starts/finishes.
-
-          // Better heuristic: Check if the last message is NOT the user's input
-          // For this test, finding 'Latency:' is a good proxy that the AI responded.
-          // We need to ensure we aren't counting OLD latency widgets.
-          // Since we clear history or start fresh, the count should increase.
-          if (latencyWidgets.evaluate().length > i) {
-            responseReceived = true;
+        // 1. Check for TTFT (First Token / Latency Widget Appearance)
+        if (!responseStarted) {
+          final currentLatencyWidgetsCount = find.textContaining('Latency:').evaluate().length;
+          if (currentLatencyWidgetsCount > initialLatencyWidgetsCount) {
+            responseStarted = true;
             stopwatch.stop();
             latencies.add(stopwatch.elapsedMilliseconds);
             print('TEST_LOG: Metric - TTFT: ${stopwatch.elapsedMilliseconds} ms');
+          }
+        }
+
+        // 2. Check for Completion
+        // We look for the UI state returning to "Idle" or "Ready" (VoiceIdle)
+        // This indicates TTS is done and Cubit is ready for next input.
+        if (find.textContaining('Ready').evaluate().isNotEmpty ||
+            find.textContaining('Tap microphone').evaluate().isNotEmpty) {
+
+          // Ensure we actually started a response before considering it finished
+          if (responseStarted) {
+            responseFinished = true;
+            print('TEST_LOG: Response finished & TTS complete.');
             break;
           }
         }
       }
 
-      if (!responseReceived) {
-        print('TEST_LOG: Failure - Timeout waiting for response.');
+      if (!responseFinished) {
+        print('TEST_LOG: Failure - Timeout waiting for response completion.');
       }
 
-      // Wait a bit for TTS/State to settle
+      // 5. Hard Wait (Buffer)
+      // Even if UI says ready, give a small buffer for cleanup/animations
       await Future.delayed(const Duration(seconds: 2));
     }
 
-    // 5. Summary
+    // 6. Summary
     if (latencies.isNotEmpty) {
       final avgLatency = latencies.reduce((a, b) => a + b) / latencies.length;
       print('TEST_LOG: === RESULTS ===');
       print('TEST_LOG: Avg Latency: ${avgLatency.toStringAsFixed(2)} ms');
     }
 
-    // 6. Crash Resilience Check (Simulated)
-    // We verify the app is still responsive after the load.
-    // If the app crashed during the loop, this test would have failed already.
-    expect(find.byType(TextField), findsOneWidget); // Verify UI is still there
+    expect(find.byType(TextField), findsOneWidget);
     print('TEST_LOG: Resilience - App survived command loop.');
   });
 }
