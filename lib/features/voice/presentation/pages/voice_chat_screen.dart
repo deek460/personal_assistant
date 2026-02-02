@@ -47,8 +47,7 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
 
   // --- SETTINGS DIALOG ---
   void _showSettingsDialog(BuildContext context) {
-    // FIX: Capture the cubit instance HERE (from the parent context)
-    // because the Dialog's context is detached from the Provider tree.
+    // Capture the cubit instance from the parent context
     final cubit = context.read<VoiceCubit>();
 
     showDialog(
@@ -57,17 +56,16 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
         // Use a local builder to refresh dialog content when lists change
         return StatefulBuilder(
           builder: (context, setDialogState) {
-            // Use the captured 'cubit' instance directly
             final wakeWords = cubit.wakeWords;
+            final selectedWakeWord = cubit.selectedWakeWord;
             final voices = cubit.availableVoices;
             final currentVoice = cubit.currentVoice;
 
-            // Find current voice object in list for dropdown
-            // Maps in dart are not equal by reference, so we compare names
-            Map<Object?, Object?>? selectedDropdownValue;
+            // Voice Dropdown Value Logic
+            Map<Object?, Object?>? selectedVoiceValue;
             if (currentVoice != null) {
               try {
-                selectedDropdownValue = voices.firstWhere(
+                selectedVoiceValue = voices.firstWhere(
                         (v) => (v as Map)['name'] == currentVoice['name'],
                     orElse: () => null
                 ) as Map<Object?, Object?>?;
@@ -86,34 +84,40 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       // --- Wake Words Section ---
-                      const Text("Wake Words", style: TextStyle(fontWeight: FontWeight.bold)),
+                      const Text("Active Wake Word", style: TextStyle(fontWeight: FontWeight.bold)),
                       const SizedBox(height: 8),
-                      const Text("Say any of these words to activate:", style: TextStyle(fontSize: 12, color: Colors.grey)),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8.0,
-                        runSpacing: 4.0,
-                        children: wakeWords.map((word) {
-                          return Chip(
-                            label: Text(word),
-                            onDeleted: wakeWords.length > 1 ? () async {
-                              await cubit.removeWakeWord(word);
-                              setDialogState(() {});
-                            } : null, // Prevent deleting last wake word
+                      const Text("Select the phrase to activate the assistant:", style: TextStyle(fontSize: 12, color: Colors.grey)),
+                      DropdownButton<String>(
+                        isExpanded: true,
+                        value: wakeWords.contains(selectedWakeWord) ? selectedWakeWord : null,
+                        hint: const Text("Select Wake Word"),
+                        items: wakeWords.map((word) {
+                          return DropdownMenuItem<String>(
+                            value: word,
+                            child: Text(
+                              word[0].toUpperCase() + word.substring(1), // Capitalize
+                            ),
                           );
                         }).toList(),
+                        onChanged: (newWord) async {
+                          if (newWord != null) {
+                            await cubit.setSelectedWakeWord(newWord);
+                            setDialogState(() {});
+                          }
+                        },
                       ),
-                      const SizedBox(height: 8),
+
+                      const SizedBox(height: 16),
+                      const Text("Add New Wake Word", style: TextStyle(fontWeight: FontWeight.bold)),
                       Row(
                         children: [
                           Expanded(
                             child: TextField(
                               controller: wakeWordController,
                               decoration: const InputDecoration(
-                                hintText: "Add new...",
+                                hintText: "e.g., Jarvis",
                                 isDense: true,
                                 contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                                border: OutlineInputBorder(),
                               ),
                             ),
                           ),
@@ -129,17 +133,40 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                           )
                         ],
                       ),
+
+                      const SizedBox(height: 8),
+                      // Optional: Chips to delete existing wake words (except selected)
+                      Wrap(
+                        spacing: 8.0,
+                        runSpacing: 4.0,
+                        children: wakeWords.map((word) {
+                          // Allow deleting only if it's not the currently selected one (or ensure logic handles it)
+                          final isSelected = word == selectedWakeWord;
+                          return Chip(
+                            label: Text(word),
+                            backgroundColor: isSelected ? Colors.blue.withAlpha(50) : null,
+                            deleteIcon: isSelected ? null : const Icon(Icons.close, size: 16),
+                            onDeleted: isSelected ? null : () async {
+                              await cubit.removeWakeWord(word);
+                              setDialogState(() {});
+                            },
+                          );
+                        }).toList(),
+                      ),
+
                       const Divider(height: 32),
 
                       // --- Voice Selection Section ---
                       const Text("Assistant Voice", style: TextStyle(fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 4),
+                      const Text("English & Indian voices only", style: TextStyle(fontSize: 10, color: Colors.grey)),
                       const SizedBox(height: 8),
                       if (voices.isEmpty)
-                        const Text("No system voices detected.", style: TextStyle(color: Colors.red))
+                        const Text("No compatible voices found.", style: TextStyle(color: Colors.red))
                       else
                         DropdownButton<Map<Object?, Object?>>(
                           isExpanded: true,
-                          value: selectedDropdownValue,
+                          value: selectedVoiceValue,
                           hint: const Text("Select Voice"),
                           items: voices.map((voice) {
                             final map = voice as Map;
@@ -319,9 +346,10 @@ class _VoiceChatBody extends StatelessWidget {
         }
       },
       builder: (context, state) {
+        final cubit = context.read<VoiceCubit>();
         return Column(
           children: [
-            _buildStatusDisplay(context, state),
+            _buildStatusDisplay(context, state, cubit.selectedWakeWord),
             const SizedBox(height: 16),
             Expanded(child: _buildChatHistory(context, state)),
             const SizedBox(height: 16),
@@ -333,7 +361,7 @@ class _VoiceChatBody extends StatelessWidget {
     );
   }
 
-  Widget _buildStatusDisplay(BuildContext context, VoiceState state) {
+  Widget _buildStatusDisplay(BuildContext context, VoiceState state, String activeWakeWord) {
     String status;
     Color statusColor;
 
@@ -341,9 +369,8 @@ class _VoiceChatBody extends StatelessWidget {
       status = (state as VoiceInitializing).message;
       statusColor = Colors.orange;
     } else if (state is VoiceListening) {
-      // Show first wake word or '...' if list is empty
-      final words = context.read<VoiceCubit>().wakeWords;
-      final displayWord = words.isNotEmpty ? '"${words.first}"' : 'Wake Word';
+      // Show the ACTIVE wake word
+      final displayWord = activeWakeWord.isNotEmpty ? '"${activeWakeWord[0].toUpperCase()}${activeWakeWord.substring(1)}"' : 'Wake Word';
       status = 'Listening for $displayWord...';
       statusColor = Colors.red;
     } else if (state is VoiceProcessing) {
@@ -353,8 +380,7 @@ class _VoiceChatBody extends StatelessWidget {
       status = 'Speaking...';
       statusColor = Colors.blue;
     } else if (state is SpeechReady) {
-      final words = context.read<VoiceCubit>().wakeWords;
-      final displayWord = words.isNotEmpty ? '"${words.first}"' : 'Wake Word';
+      final displayWord = activeWakeWord.isNotEmpty ? '"${activeWakeWord[0].toUpperCase()}${activeWakeWord.substring(1)}"' : 'Wake Word';
       status = 'Ready. Say $displayWord to start.';
       statusColor = Colors.green;
     } else if (state is VoiceIdle) {

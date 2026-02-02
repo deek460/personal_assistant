@@ -6,6 +6,7 @@ class ModelManagementService {
   static const String _modelsKey = 'ai_models';
   static const String _selectedModelKey = 'selected_model_id';
   static const String _wakeWordsKey = 'wake_words';
+  static const String _selectedWakeWordKey = 'selected_wake_word';
   static const String _voiceKey = 'selected_voice_preferences';
 
   static final ModelManagementService _instance = ModelManagementService._internal();
@@ -85,13 +86,23 @@ class ModelManagementService {
     final prefs = await SharedPreferences.getInstance();
     final words = prefs.getStringList(_wakeWordsKey);
     // Return default set if nothing saved
-    return words ?? ['jack', 'computer', 'assistant', 'hey buddy'];
+    return words ?? ['jack', 'computer', 'assistant'];
   }
 
   Future<void> saveWakeWords(List<String> words) async {
     final prefs = await SharedPreferences.getInstance();
     // Ensure we save lower case for consistent matching
     await prefs.setStringList(_wakeWordsKey, words.map((e) => e.toLowerCase()).toList());
+  }
+
+  Future<String> getSelectedWakeWord() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_selectedWakeWordKey) ?? 'jack';
+  }
+
+  Future<void> saveSelectedWakeWord(String word) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_selectedWakeWordKey, word.toLowerCase());
   }
 
   // --- TTS Voice Management ---

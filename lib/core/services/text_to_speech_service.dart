@@ -106,7 +106,19 @@ class TextToSpeechService {
 
   Future<List<dynamic>> getAvailableVoices() async {
     try {
-      return await _tts.getVoices;
+      List<dynamic> voices = await _tts.getVoices;
+
+      // FILTER: Only keep English and Indian voices
+      // Locales typically look like: "en-US", "hi-IN", "en-IN", etc.
+      // We check if the locale contains "en" OR "IN" (case insensitive check)
+      return voices.where((voice) {
+        if (voice is Map) {
+          final locale = voice['locale'].toString().toLowerCase();
+          return locale.contains('en');
+        }
+        return false;
+      }).toList();
+
     } catch (e) {
       print("TTS Error fetching voices: $e");
       return [];

@@ -53,7 +53,6 @@ class VoiceError extends VoiceState {
   final String errorMessage;
   VoiceError(this.errorMessage, List<VoiceChatMessage> chatHistory) : super(chatHistory);
 }
-// New state to signal settings changes (optional, mostly for UI refresh)
 class VoiceSettingsUpdated extends VoiceState {
   VoiceSettingsUpdated(List<VoiceChatMessage> chatHistory) : super(chatHistory);
 }
@@ -72,6 +71,7 @@ class VoiceCubit extends Cubit<VoiceState> {
 
   // -- Settings State --
   List<String> _wakeWords = [];
+  String _selectedWakeWord = 'jack'; // Default
   List<dynamic> _availableVoices = [];
   Map<String, String>? _currentVoice;
 
@@ -83,6 +83,7 @@ class VoiceCubit extends Cubit<VoiceState> {
 
   // Getters for UI
   List<String> get wakeWords => _wakeWords;
+  String get selectedWakeWord => _selectedWakeWord;
   List<dynamic> get availableVoices => _availableVoices;
   Map<String, String>? get currentVoice => _currentVoice;
 
@@ -110,6 +111,7 @@ class VoiceCubit extends Cubit<VoiceState> {
 
       // Load Settings
       _wakeWords = await _modelManagementService.getWakeWords();
+      _selectedWakeWord = await _modelManagementService.getSelectedWakeWord();
       _availableVoices = await _ttsService.getAvailableVoices();
       final savedVoice = await _modelManagementService.getSelectedVoice();
       if (savedVoice != null) {
@@ -178,7 +180,8 @@ class VoiceCubit extends Cubit<VoiceState> {
     if (!_wakeWords.contains(lower)) {
       _wakeWords.add(lower);
       await _modelManagementService.saveWakeWords(_wakeWords);
-      emit(VoiceSettingsUpdated(_chatHistory));
+      // Automatically select the new wake word
+      await setSelectedWakeWord(lower);
     }
   }
 
@@ -186,6 +189,19 @@ class VoiceCubit extends Cubit<VoiceState> {
     if (_wakeWords.contains(word)) {
       _wakeWords.remove(word);
       await _modelManagementService.saveWakeWords(_wakeWords);
+      // If deleted word was selected, revert to default
+      if (_selectedWakeWord == word) {
+        await setSelectedWakeWord(_wakeWords.isNotEmpty ? _wakeWords.first : 'jack');
+      } else {
+        emit(VoiceSettingsUpdated(_chatHistory));
+      }
+    }
+  }
+
+  Future<void> setSelectedWakeWord(String word) async {
+    if (_wakeWords.contains(word)) {
+      _selectedWakeWord = word;
+      await _modelManagementService.saveSelectedWakeWord(word);
       emit(VoiceSettingsUpdated(_chatHistory));
     }
   }
@@ -286,27 +302,21 @@ class VoiceCubit extends Cubit<VoiceState> {
     final String originalText = _lastRecognizedText.trim().toLowerCase();
 
     // DYNAMIC WAKE WORD DETECTION
-    String? detectedWakeWord;
-    // Iterate through user defined wake words
-    for (String word in _wakeWords) {
-      if (originalText.startsWith(word)) {
-        detectedWakeWord = word;
-        break; // Stop at first match
-      }
-    }
+    // ONLY check against the SELECTED wake word
+    bool matchFound = originalText.startsWith(_selectedWakeWord);
 
-    if (originalText.isEmpty || detectedWakeWord == null) {
+    if (!matchFound || originalText.isEmpty) {
       _restartLoopImmediately();
       return;
     }
 
     // Strip wake word to get command
-    String command = originalText.substring(detectedWakeWord.length).trim().replaceAll(RegExp(r'^[,.?!:\s]+'), '');
+    String command = originalText.substring(_selectedWakeWord.length).trim().replaceAll(RegExp(r'^[,.?!:\s]+'), '');
 
     // Case 1: Just the wake word ("Jack")
     if (command.isEmpty) {
       // Capitalize first letter for display
-      String displayWake = detectedWakeWord[0].toUpperCase() + detectedWakeWord.substring(1);
+      String displayWake = _selectedWakeWord[0].toUpperCase() + _selectedWakeWord.substring(1);
       _chatHistory.add(VoiceChatMessage(id: DateTime.now().toString(), text: displayWake, isUser: true, timestamp: DateTime.now()));
       emit(VoiceResponseReady(displayWake, "Yes?", _chatHistory));
       await _ttsService.speak("Yes?");
@@ -324,7 +334,6 @@ class VoiceCubit extends Cubit<VoiceState> {
   }
 
   void _restartLoopImmediately() {
-    // If state was just updated for settings, preserve it, otherwise go idle
     if (state is! VoiceSettingsUpdated) {
       emit(VoiceIdle(_chatHistory));
     }
