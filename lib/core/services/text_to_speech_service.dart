@@ -101,4 +101,24 @@ class TextToSpeechService {
       await _queueCompleter!.future;
     }
   }
+
+  // --- New Voice Management Methods ---
+
+  Future<List<dynamic>> getAvailableVoices() async {
+    try {
+      return await _tts.getVoices;
+    } catch (e) {
+      print("TTS Error fetching voices: $e");
+      return [];
+    }
+  }
+
+  Future<void> setVoice(Map<String, String> voice) async {
+    try {
+      print("TTS: Setting voice to $voice");
+      await _tts.setVoice(voice);
+    } catch (e) {
+      print("TTS Error setting voice: $e");
+    }
+  }
 }

@@ -24,7 +24,7 @@ class VoiceChatScreen extends StatefulWidget {
 class _VoiceChatScreenState extends State<VoiceChatScreen> {
   final ModelManagementService _modelService = ModelManagementService();
   final ScrollController _scrollController = ScrollController();
-  final TextEditingController _debugInputController = TextEditingController(); // For debug input
+  final TextEditingController _debugInputController = TextEditingController();
   AIModel? _selectedModel;
 
   @override
@@ -43,6 +43,136 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
   Future<void> _loadSelectedModel() async {
     final model = await _modelService.getSelectedModel();
     setState(() => _selectedModel = model);
+  }
+
+  // --- SETTINGS DIALOG ---
+  void _showSettingsDialog(BuildContext context) {
+    // FIX: Capture the cubit instance HERE (from the parent context)
+    // because the Dialog's context is detached from the Provider tree.
+    final cubit = context.read<VoiceCubit>();
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        // Use a local builder to refresh dialog content when lists change
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            // Use the captured 'cubit' instance directly
+            final wakeWords = cubit.wakeWords;
+            final voices = cubit.availableVoices;
+            final currentVoice = cubit.currentVoice;
+
+            // Find current voice object in list for dropdown
+            // Maps in dart are not equal by reference, so we compare names
+            Map<Object?, Object?>? selectedDropdownValue;
+            if (currentVoice != null) {
+              try {
+                selectedDropdownValue = voices.firstWhere(
+                        (v) => (v as Map)['name'] == currentVoice['name'],
+                    orElse: () => null
+                ) as Map<Object?, Object?>?;
+              } catch (e) { /* ignore */ }
+            }
+
+            final TextEditingController wakeWordController = TextEditingController();
+
+            return AlertDialog(
+              title: const Text("Voice Settings"),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // --- Wake Words Section ---
+                      const Text("Wake Words", style: TextStyle(fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 8),
+                      const Text("Say any of these words to activate:", style: TextStyle(fontSize: 12, color: Colors.grey)),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8.0,
+                        runSpacing: 4.0,
+                        children: wakeWords.map((word) {
+                          return Chip(
+                            label: Text(word),
+                            onDeleted: wakeWords.length > 1 ? () async {
+                              await cubit.removeWakeWord(word);
+                              setDialogState(() {});
+                            } : null, // Prevent deleting last wake word
+                          );
+                        }).toList(),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: wakeWordController,
+                              decoration: const InputDecoration(
+                                hintText: "Add new...",
+                                isDense: true,
+                                contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                                border: OutlineInputBorder(),
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.add_circle, color: Colors.blue),
+                            onPressed: () async {
+                              if (wakeWordController.text.isNotEmpty) {
+                                await cubit.addWakeWord(wakeWordController.text);
+                                wakeWordController.clear();
+                                setDialogState(() {});
+                              }
+                            },
+                          )
+                        ],
+                      ),
+                      const Divider(height: 32),
+
+                      // --- Voice Selection Section ---
+                      const Text("Assistant Voice", style: TextStyle(fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 8),
+                      if (voices.isEmpty)
+                        const Text("No system voices detected.", style: TextStyle(color: Colors.red))
+                      else
+                        DropdownButton<Map<Object?, Object?>>(
+                          isExpanded: true,
+                          value: selectedDropdownValue,
+                          hint: const Text("Select Voice"),
+                          items: voices.map((voice) {
+                            final map = voice as Map;
+                            return DropdownMenuItem<Map<Object?, Object?>>(
+                              value: map,
+                              child: Text(
+                                "${map['name']} (${map['locale']})",
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            );
+                          }).toList(),
+                          onChanged: (newVoice) async {
+                            if (newVoice != null) {
+                              await cubit.updateVoice(Map<String,String>.from(newVoice));
+                              setDialogState(() {});
+                            }
+                          },
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text("Close"),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   @override
@@ -69,6 +199,12 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                   },
                 ),
                 actions: [
+                  // SETTINGS BUTTON
+                  IconButton(
+                    icon: const Icon(Icons.settings),
+                    tooltip: 'Settings',
+                    onPressed: () => _showSettingsDialog(context),
+                  ),
                   IconButton(
                     icon: const Icon(Icons.clear_all),
                     tooltip: 'Clear History',
@@ -108,12 +244,7 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
 
                   Expanded(child: _VoiceChatBody(scrollController: _scrollController)),
 
-                  // --- DEBUG INPUT FIELD (Visible in Debug Mode or Testing) ---
-                  // We use kDebugMode check, or you can use a custom flag.
-                  // Since integration tests run in a mode that might be profile/release on Firebase,
-                  // it's safer to always show it if a specific environment var is set,
-                  // OR just leave it visible but small for now during development.
-                  // For this request, I will make it visible.
+                  // --- DEBUG INPUT FIELD ---
                   Container(
                     color: Colors.grey.shade100,
                     padding: const EdgeInsets.all(8.0),
@@ -137,11 +268,6 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                           icon: const Icon(Icons.send, color: Colors.blue),
                           onPressed: () {
                             if (_debugInputController.text.isNotEmpty) {
-                              // Inject text into the logic
-                              // We need to access the private method _generateStreamingResponse ideally,
-                              // or expose a public method for text input in VoiceCubit.
-                              // Since _generateStreamingResponse is private, we will add a public wrapper in VoiceCubit.
-                              // Assuming VoiceCubit has a method 'processTextCommand' (I will add it below).
                               context.read<VoiceCubit>().processTextCommand(_debugInputController.text);
                               _debugInputController.clear();
                             }
@@ -215,7 +341,10 @@ class _VoiceChatBody extends StatelessWidget {
       status = (state as VoiceInitializing).message;
       statusColor = Colors.orange;
     } else if (state is VoiceListening) {
-      status = 'Listening for "Jack"...';
+      // Show first wake word or '...' if list is empty
+      final words = context.read<VoiceCubit>().wakeWords;
+      final displayWord = words.isNotEmpty ? '"${words.first}"' : 'Wake Word';
+      status = 'Listening for $displayWord...';
       statusColor = Colors.red;
     } else if (state is VoiceProcessing) {
       status = 'Processing...';
@@ -224,7 +353,9 @@ class _VoiceChatBody extends StatelessWidget {
       status = 'Speaking...';
       statusColor = Colors.blue;
     } else if (state is SpeechReady) {
-      status = 'Ready. Say "Jack" to start.';
+      final words = context.read<VoiceCubit>().wakeWords;
+      final displayWord = words.isNotEmpty ? '"${words.first}"' : 'Wake Word';
+      status = 'Ready. Say $displayWord to start.';
       statusColor = Colors.green;
     } else if (state is VoiceIdle) {
       status = 'Paused. Tap microphone to resume.';
@@ -272,7 +403,7 @@ class _VoiceChatBody extends StatelessWidget {
             child: state.chatHistory.isEmpty
                 ? const Center(
               child: Text(
-                'Say "Jack" followed by your question!',
+                'Say your wake word followed by your question!',
                 style: TextStyle(fontStyle: FontStyle.italic),
               ),
             )

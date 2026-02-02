@@ -5,10 +5,14 @@ import '../models/ai_model.dart';
 class ModelManagementService {
   static const String _modelsKey = 'ai_models';
   static const String _selectedModelKey = 'selected_model_id';
+  static const String _wakeWordsKey = 'wake_words';
+  static const String _voiceKey = 'selected_voice_preferences';
 
   static final ModelManagementService _instance = ModelManagementService._internal();
   factory ModelManagementService() => _instance;
   ModelManagementService._internal();
+
+  // --- AI Model Management ---
 
   Future<List<AIModel>> getModels() async {
     final prefs = await SharedPreferences.getInstance();
@@ -40,14 +44,11 @@ class ModelManagementService {
   Future<void> addModel(AIModel model) async {
     final models = await getModels();
 
-    // FIX: Check if model with same ID exists
     final index = models.indexWhere((m) => m.id == model.id);
 
     if (index != -1) {
-      // Update existing model (replace it)
       models[index] = model;
     } else {
-      // Add new model
       models.add(model);
     }
 
@@ -76,5 +77,38 @@ class ModelManagementService {
 
     final models = await getModels();
     return models.where((model) => model.id == selectedId).firstOrNull;
+  }
+
+  // --- Wake Word Management ---
+
+  Future<List<String>> getWakeWords() async {
+    final prefs = await SharedPreferences.getInstance();
+    final words = prefs.getStringList(_wakeWordsKey);
+    // Return default set if nothing saved
+    return words ?? ['jack', 'computer', 'assistant', 'hey buddy'];
+  }
+
+  Future<void> saveWakeWords(List<String> words) async {
+    final prefs = await SharedPreferences.getInstance();
+    // Ensure we save lower case for consistent matching
+    await prefs.setStringList(_wakeWordsKey, words.map((e) => e.toLowerCase()).toList());
+  }
+
+  // --- TTS Voice Management ---
+
+  Future<Map<String, String>?> getSelectedVoice() async {
+    final prefs = await SharedPreferences.getInstance();
+    final String? jsonStr = prefs.getString(_voiceKey);
+    if (jsonStr == null) return null;
+    try {
+      return Map<String, String>.from(json.decode(jsonStr));
+    } catch (e) {
+      return null;
+    }
+  }
+
+  Future<void> saveSelectedVoice(Map<String, String> voice) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_voiceKey, json.encode(voice));
   }
 }

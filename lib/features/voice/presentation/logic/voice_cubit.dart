@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:file_picker/file_picker.dart';
@@ -54,6 +53,10 @@ class VoiceError extends VoiceState {
   final String errorMessage;
   VoiceError(this.errorMessage, List<VoiceChatMessage> chatHistory) : super(chatHistory);
 }
+// New state to signal settings changes (optional, mostly for UI refresh)
+class VoiceSettingsUpdated extends VoiceState {
+  VoiceSettingsUpdated(List<VoiceChatMessage> chatHistory) : super(chatHistory);
+}
 
 class VoiceCubit extends Cubit<VoiceState> {
   final SpeechToTextService _speechService;
@@ -67,16 +70,24 @@ class VoiceCubit extends Cubit<VoiceState> {
   static const Duration resetTimeout = Duration(milliseconds: 200);
   bool _isManualStop = false;
 
+  // -- Settings State --
+  List<String> _wakeWords = [];
+  List<dynamic> _availableVoices = [];
+  Map<String, String>? _currentVoice;
+
   VoiceCubit(
       this._speechService,
       this._ttsService,
       this._generateResponseUseCase,
       ) : super(VoiceInitial());
 
+  // Getters for UI
+  List<String> get wakeWords => _wakeWords;
+  List<dynamic> get availableVoices => _availableVoices;
+  Map<String, String>? get currentVoice => _currentVoice;
+
   Future<void> processTextCommand(String command) async {
     print("VoiceCubit: Processing injected command: $command");
-
-    // Add User Message
     _chatHistory.add(VoiceChatMessage(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       text: command,
@@ -84,7 +95,6 @@ class VoiceCubit extends Cubit<VoiceState> {
       timestamp: DateTime.now(),
     ));
     emit(VoiceProcessing(command, _chatHistory));
-
     try {
       await _generateStreamingResponse(command);
     } catch (e) {
@@ -92,12 +102,20 @@ class VoiceCubit extends Cubit<VoiceState> {
     }
   }
 
-  // ... (initializeServices, switchModel, pickAndAddModel, permissions remain the same) ...
   Future<void> initializeServices({AIModel? specificModel}) async {
     emit(VoiceInitializing(_chatHistory, message: "Checking permissions..."));
 
     try {
       await _requestStoragePermission();
+
+      // Load Settings
+      _wakeWords = await _modelManagementService.getWakeWords();
+      _availableVoices = await _ttsService.getAvailableVoices();
+      final savedVoice = await _modelManagementService.getSelectedVoice();
+      if (savedVoice != null) {
+        _currentVoice = savedVoice;
+        await _ttsService.setVoice(savedVoice);
+      }
 
       AIModel? modelToLoad = specificModel;
       modelToLoad ??= await _modelManagementService.getSelectedModel();
@@ -151,6 +169,35 @@ class VoiceCubit extends Cubit<VoiceState> {
       emit(VoiceError('Initialization failed: $e', _chatHistory));
     }
   }
+
+  // --- Settings Management Methods ---
+
+  Future<void> addWakeWord(String word) async {
+    if (word.trim().isEmpty) return;
+    final lower = word.trim().toLowerCase();
+    if (!_wakeWords.contains(lower)) {
+      _wakeWords.add(lower);
+      await _modelManagementService.saveWakeWords(_wakeWords);
+      emit(VoiceSettingsUpdated(_chatHistory));
+    }
+  }
+
+  Future<void> removeWakeWord(String word) async {
+    if (_wakeWords.contains(word)) {
+      _wakeWords.remove(word);
+      await _modelManagementService.saveWakeWords(_wakeWords);
+      emit(VoiceSettingsUpdated(_chatHistory));
+    }
+  }
+
+  Future<void> updateVoice(Map<String, String> voice) async {
+    _currentVoice = voice;
+    await _ttsService.setVoice(voice);
+    await _modelManagementService.saveSelectedVoice(voice);
+    emit(VoiceSettingsUpdated(_chatHistory));
+  }
+
+  // --- End Settings Management ---
 
   Future<void> switchModel(AIModel model) async {
     _isManualStop = true;
@@ -236,30 +283,51 @@ class VoiceCubit extends Cubit<VoiceState> {
 
     _speechService.pauseListening();
 
-    final String originalText = _lastRecognizedText.trim();
-    if (originalText.isEmpty) { _restartLoopImmediately(); return; }
-    if (!originalText.toLowerCase().startsWith('jack')) { _restartLoopImmediately(); return; }
+    final String originalText = _lastRecognizedText.trim().toLowerCase();
 
-    String command = originalText.substring(4).trim().replaceAll(RegExp(r'^[,.?!:\s]+'), '');
+    // DYNAMIC WAKE WORD DETECTION
+    String? detectedWakeWord;
+    // Iterate through user defined wake words
+    for (String word in _wakeWords) {
+      if (originalText.startsWith(word)) {
+        detectedWakeWord = word;
+        break; // Stop at first match
+      }
+    }
 
+    if (originalText.isEmpty || detectedWakeWord == null) {
+      _restartLoopImmediately();
+      return;
+    }
+
+    // Strip wake word to get command
+    String command = originalText.substring(detectedWakeWord.length).trim().replaceAll(RegExp(r'^[,.?!:\s]+'), '');
+
+    // Case 1: Just the wake word ("Jack")
     if (command.isEmpty) {
-      _chatHistory.add(VoiceChatMessage(id: DateTime.now().toString(), text: "Jack", isUser: true, timestamp: DateTime.now()));
-      emit(VoiceResponseReady("Jack", "Yes?", _chatHistory));
+      // Capitalize first letter for display
+      String displayWake = detectedWakeWord[0].toUpperCase() + detectedWakeWord.substring(1);
+      _chatHistory.add(VoiceChatMessage(id: DateTime.now().toString(), text: displayWake, isUser: true, timestamp: DateTime.now()));
+      emit(VoiceResponseReady(displayWake, "Yes?", _chatHistory));
       await _ttsService.speak("Yes?");
       await _ttsService.waitForCompletion();
       if (!_isManualStop) await startListening();
       return;
     }
 
-    _chatHistory.add(VoiceChatMessage(id: DateTime.now().toString(), text: originalText, isUser: true, timestamp: DateTime.now()));
-    emit(VoiceProcessing(originalText, _chatHistory));
+    // Case 2: Wake word + command ("Jack what time is it")
+    _chatHistory.add(VoiceChatMessage(id: DateTime.now().toString(), text: _lastRecognizedText, isUser: true, timestamp: DateTime.now()));
+    emit(VoiceProcessing(_lastRecognizedText, _chatHistory));
 
     try { await _generateStreamingResponse(command); }
     catch (e) { _handleErrorAndRestart(); }
   }
 
   void _restartLoopImmediately() {
-    emit(VoiceIdle(_chatHistory));
+    // If state was just updated for settings, preserve it, otherwise go idle
+    if (state is! VoiceSettingsUpdated) {
+      emit(VoiceIdle(_chatHistory));
+    }
     _resetStateTimer?.cancel();
     _resetStateTimer = Timer(resetTimeout, () async { if (!isClosed && !_isManualStop) await startListening(); });
   }
@@ -282,12 +350,10 @@ class VoiceCubit extends Cubit<VoiceState> {
     final trace = FirebasePerformance.instance.newTrace('ai_response_generation');
     await trace.start();
 
-    // Add useful attributes for filtering in console
     final repo = _generateResponseUseCase.repository as GemmaRepositoryImpl;
     trace.putAttribute('backend_type', repo.isUsingGpu ? 'GPU' : 'CPU');
     trace.putAttribute('input_length', inputText.length.toString());
 
-    // --- LATENCY TRACKING ---
     final DateTime startTime = DateTime.now();
     Duration? firstTokenLatency;
 
@@ -295,12 +361,8 @@ class VoiceCubit extends Cubit<VoiceState> {
       await for (String token in _generateResponseUseCase.callStreaming(inputText)) {
         if (_isManualStop) break;
 
-        // Calculate latency on FIRST token
-        // Calculate latency on FIRST token
         if (firstTokenLatency == null) {
           firstTokenLatency = DateTime.now().difference(startTime);
-
-          // 2. LOG TIME TO FIRST TOKEN (TTFT) METRIC
           trace.setMetric('time_to_first_token_ms', firstTokenLatency.inMilliseconds);
         }
 
@@ -319,7 +381,7 @@ class VoiceCubit extends Cubit<VoiceState> {
           rawContent: fullRawResponse,
           isUser: false,
           timestamp: DateTime.now(),
-          latency: firstTokenLatency, // Pass latency
+          latency: firstTokenLatency,
         );
         emit(VoiceStreamingResponse(inputText, fullRawResponse, false, [..._chatHistory, msg]));
       }
@@ -336,12 +398,10 @@ class VoiceCubit extends Cubit<VoiceState> {
         formattedContent: formatted,
         isUser: false,
         timestamp: DateTime.now(),
-        latency: firstTokenLatency, // Pass final latency
+        latency: firstTokenLatency,
       );
       _chatHistory.add(finalMsg);
 
-      // 3. LOG TOTAL TOKENS & STOP TRACE
-      // Estimate token count roughly by spaces or char count / 4
       trace.setMetric('response_char_count', fullRawResponse.length);
       trace.putAttribute('status', 'success');
       await trace.stop();
