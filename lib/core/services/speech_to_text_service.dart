@@ -51,8 +51,11 @@ class SpeechToTextService {
     // Hook up the error callback for this session
     _onErrorCallback = (error) {
       // If we get a "no match" or other permanent error, treat session as done
-      if (error.permanent || error.errorMsg == 'error_no_match') {
-        print('Permanent speech error detected. Ending session.');
+      // Added 'error_language_unavailable' to catch offline mismatch issues
+      if (error.permanent ||
+          error.errorMsg == 'error_no_match' ||
+          error.errorMsg == 'error_language_unavailable') {
+        print('Permanent/Language speech error detected (${error.errorMsg}). Ending session.');
         onSessionComplete();
       }
     };
@@ -65,6 +68,11 @@ class SpeechToTextService {
     };
 
     print('Starting to listen...');
+
+    // Fetch system locale to ensure we use the installed offline pack
+    // e.g., if user has 'en_IN' installed but we forced 'en_US', offline would fail.
+    var systemLocale = await _speech.systemLocale();
+
     await _speech.listen(
       onResult: (result) {
         // IGNORE results if paused
@@ -80,7 +88,11 @@ class SpeechToTextService {
       },
       listenFor: const Duration(seconds: 60), // Increased to 60s
       pauseFor: const Duration(seconds: 5),   // Increased pause tolerance
-      localeId: 'en_US',
+
+      // FIX: Use system locale instead of hardcoded 'en_US'
+      // This allows 'en_IN' (India) or 'en_GB' (UK) offline packs to work.
+      localeId: systemLocale?.localeId,
+
       cancelOnError: true,
       listenOptions: SpeechListenOptions(
         partialResults: true,

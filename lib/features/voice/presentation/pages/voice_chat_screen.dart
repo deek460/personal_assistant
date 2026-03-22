@@ -86,7 +86,6 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                       // --- Wake Words Section ---
                       const Text("Active Wake Word", style: TextStyle(fontWeight: FontWeight.bold)),
                       const SizedBox(height: 8),
-                      const Text("Select the phrase to activate the assistant:", style: TextStyle(fontSize: 12, color: Colors.grey)),
                       DropdownButton<String>(
                         isExpanded: true,
                         value: wakeWords.contains(selectedWakeWord) ? selectedWakeWord : null,
@@ -135,12 +134,10 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                       ),
 
                       const SizedBox(height: 8),
-                      // Optional: Chips to delete existing wake words (except selected)
                       Wrap(
                         spacing: 8.0,
                         runSpacing: 4.0,
                         children: wakeWords.map((word) {
-                          // Allow deleting only if it's not the currently selected one (or ensure logic handles it)
                           final isSelected = word == selectedWakeWord;
                           return Chip(
                             label: Text(word),
@@ -159,8 +156,9 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                       // --- Voice Selection Section ---
                       const Text("Assistant Voice", style: TextStyle(fontWeight: FontWeight.bold)),
                       const SizedBox(height: 4),
-                      const Text("English & Indian voices only", style: TextStyle(fontSize: 10, color: Colors.grey)),
+                      const Text("Filtered: US, UK & India", style: TextStyle(fontSize: 10, color: Colors.grey)),
                       const SizedBox(height: 8),
+
                       if (voices.isEmpty)
                         const Text("No compatible voices found.", style: TextStyle(color: Colors.red))
                       else
@@ -185,6 +183,40 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                             }
                           },
                         ),
+
+                      const SizedBox(height: 24),
+
+                      // --- Offline Instructions ---
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.grey.withAlpha(20),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.grey.withAlpha(50)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: const [
+                                Icon(Icons.offline_pin, size: 16, color: Colors.green),
+                                SizedBox(width: 8),
+                                Text("Offline Usage", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                              ],
+                            ),
+                            const SizedBox(height: 4),
+                            const Text(
+                              "To use voices offline, ensure you have downloaded the language pack in your device settings:",
+                              style: TextStyle(fontSize: 11),
+                            ),
+                            const SizedBox(height: 4),
+                            const Text(
+                              "Settings > Accessibility > Text-to-Speech > Install Voice Data",
+                              style: TextStyle(fontSize: 11, fontStyle: FontStyle.italic, color: Colors.blueGrey),
+                            ),
+                          ],
+                        ),
+                      )
                     ],
                   ),
                 ),
@@ -369,7 +401,6 @@ class _VoiceChatBody extends StatelessWidget {
       status = (state as VoiceInitializing).message;
       statusColor = Colors.orange;
     } else if (state is VoiceListening) {
-      // Show the ACTIVE wake word
       final displayWord = activeWakeWord.isNotEmpty ? '"${activeWakeWord[0].toUpperCase()}${activeWakeWord.substring(1)}"' : 'Wake Word';
       status = 'Listening for $displayWord...';
       statusColor = Colors.red;

@@ -13,28 +13,31 @@ class TextToSpeechService {
   }
 
   Future<void> _initTts() async {
-    // We handle the queue manually, so we turn OFF the internal await for the public method
-    // But we use it internally to ensure sequential playback.
-    await _tts.awaitSpeakCompletion(true);
+    try {
+      // On Android, we need to wait for the engine to bind
+      await _tts.awaitSpeakCompletion(true);
 
-    await _tts.setLanguage("en-US");
-    await _tts.setPitch(1.0);
-    // REDUCED SPEED: Changed from 0.5 to 0.4 for better clarity/pauses
-    await _tts.setSpeechRate(0.35);
+      await _tts.setLanguage("en-US");
+      await _tts.setPitch(1.0);
+      // REDUCED SPEED: Changed from 0.5 to 0.4 for better clarity/pauses
+      await _tts.setSpeechRate(0.35);
 
-    _tts.setStartHandler(() {
-      print("TTS: Started speaking utterance");
-    });
+      _tts.setStartHandler(() {
+        print("TTS: Started speaking utterance");
+      });
 
-    _tts.setCompletionHandler(() {
-      print("TTS: Completed utterance");
-    });
+      _tts.setCompletionHandler(() {
+        print("TTS: Completed utterance");
+      });
 
-    _tts.setErrorHandler((msg) {
-      print("TTS error: $msg");
-      _isSpeaking = false;
-      _clearQueue();
-    });
+      _tts.setErrorHandler((msg) {
+        print("TTS error: $msg");
+        _isSpeaking = false;
+        _clearQueue();
+      });
+    } catch (e) {
+      print("TTS Initialization Error: $e");
+    }
   }
 
   /// Adds text to the queue and starts processing if idle.
@@ -106,18 +109,68 @@ class TextToSpeechService {
 
   Future<List<dynamic>> getAvailableVoices() async {
     try {
-      List<dynamic> voices = await _tts.getVoices;
+      // Retry logic: TTS engines sometimes take a moment to initialize on Android
+      dynamic rawVoices;
+      for (int i = 0; i < 3; i++) {
+        rawVoices = await _tts.getVoices;
+        if (rawVoices != null && (rawVoices as List).isNotEmpty) break;
+        await Future.delayed(const Duration(milliseconds: 200));
+      }
 
-      // FILTER: Only keep English and Indian voices
-      // Locales typically look like: "en-US", "hi-IN", "en-IN", etc.
-      // We check if the locale contains "en" OR "IN" (case insensitive check)
-      return voices.where((voice) {
+      if (rawVoices == null || rawVoices is! List) {
+        print("TTS: getVoices returned null or not a list");
+        return [];
+      }
+
+      print("TTS: Raw voices count: ${rawVoices.length}");
+
+      final filtered = rawVoices.where((voice) {
         if (voice is Map) {
-          final locale = voice['locale'].toString().toLowerCase();
-          return locale.contains('en');
+          final localeVal = voice['locale'] ?? voice['language'];
+          if (localeVal == null) return false;
+
+          final locale = localeVal.toString().toLowerCase();
+
+          // 1. Region Filter (Keep relevant languages)
+          // We restrict to English and Indian variants to avoid listing every world language
+          bool isUS = locale.contains('en-us') || locale.contains('en_us');
+          bool isUK = locale.contains('en-gb') || locale.contains('en_gb');
+          bool isIndia = locale.contains('en-in') || locale.contains('en_in');; // Covers en-IN, hi-IN, bn-IN, etc.
+
+          if (!isUS && !isUK && !isIndia) return false;
+
+          // 2. OFFLINE FILTER (Critical)
+          // Check 'isNetworkConnectionRequired'. If true, it means the voice needs internet.
+          // We want ONLY voices where this is FALSE or NULL (assumed local).
+          if (voice.containsKey('isNetworkConnectionRequired')) {
+            if (voice['isNetworkConnectionRequired'] == true) {
+              return false; // Exclude network voices
+            }
+          }
+
+          // Additional check: 'networkRequired' key (varies by engine version)
+          if (voice.containsKey('networkRequired')) {
+            if (voice['networkRequired'] == true) {
+              return false;
+            }
+          }
+
+          // If we passed checks, it's likely an offline voice
+          return true;
         }
         return false;
       }).toList();
+
+      print("TTS: Offline-capable filtered voices count: ${filtered.length}");
+
+      // Sort: India first, then US/UK
+      filtered.sort((a, b) {
+        final localeA = (a['locale'] ?? '').toString();
+        final localeB = (b['locale'] ?? '').toString();
+        return localeA.compareTo(localeB);
+      });
+
+      return filtered;
 
     } catch (e) {
       print("TTS Error fetching voices: $e");
