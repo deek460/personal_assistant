@@ -5,7 +5,8 @@ class VoiceChatMessage {
   final String? formattedContent;
   final bool isUser;
   final DateTime timestamp;
-  final Duration? latency; // NEW: Field to store response time
+  final Duration? latency;
+  final String? imagePath; // NEW: Path to local image file
 
   VoiceChatMessage({
     required this.id,
@@ -15,6 +16,7 @@ class VoiceChatMessage {
     required this.isUser,
     required this.timestamp,
     this.latency,
+    this.imagePath,
   });
 
   VoiceChatMessage copyWith({
@@ -25,6 +27,7 @@ class VoiceChatMessage {
     bool? isUser,
     DateTime? timestamp,
     Duration? latency,
+    String? imagePath,
   }) {
     return VoiceChatMessage(
       id: id ?? this.id,
@@ -34,6 +37,7 @@ class VoiceChatMessage {
       isUser: isUser ?? this.isUser,
       timestamp: timestamp ?? this.timestamp,
       latency: latency ?? this.latency,
+      imagePath: imagePath ?? this.imagePath,
     );
   }
 
@@ -45,7 +49,8 @@ class VoiceChatMessage {
       'formattedContent': formattedContent,
       'isUser': isUser,
       'timestamp': timestamp.toIso8601String(),
-      'latency': latency?.inMilliseconds, // Store as ms
+      'latency': latency?.inMilliseconds,
+      'imagePath': imagePath,
     };
   }
 
@@ -60,6 +65,7 @@ class VoiceChatMessage {
       latency: json['latency'] != null
           ? Duration(milliseconds: json['latency'])
           : null,
+      imagePath: json['imagePath'],
     );
   }
 }

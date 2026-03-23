@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import '../../domain/repositories/gemma_repository.dart';
 import '../../../../core/services/text_formatter_service.dart';
+import '../../../../core/services/image_processing_service.dart'; // NEW IMPORT
 
 class GemmaRepositoryImpl implements GemmaRepository {
   InferenceModel? _inferenceModel;
@@ -14,6 +15,9 @@ class GemmaRepositoryImpl implements GemmaRepository {
 
   PreferredBackend _currentBackend = PreferredBackend.gpu;
   static const String _crashMarkerKey = 'gpu_init_crash_marker';
+
+  // Inject the ML Kit processing service
+  final ImageProcessingService _imageService = ImageProcessingService();
 
   @override
   bool get isModelLoaded => _isModelLoaded;
@@ -144,7 +148,6 @@ class GemmaRepositoryImpl implements GemmaRepository {
       '/storage/emulated/0/gemma3-1B-it-int4.task',
       '/storage/emulated/0/Download/gemma-3n-E2B-it-int4.task',
       '/storage/emulated/0/Downloads/gemma-3n-E2B-it-int4.task',
-
     ];
 
     for (String path in possiblePaths) {
@@ -165,8 +168,9 @@ class GemmaRepositoryImpl implements GemmaRepository {
     return "Error: Use Stream implementation";
   }
 
+  // UPDATED to accept imagePath and inject ML Kit context
   @override
-  Stream<String> generateResponseStream(String prompt) async* {
+  Stream<String> generateResponseStream(String prompt, {String? imagePath}) async* {
     if (!_isModelLoaded || _inferenceModel == null) throw Exception('Gemma model not initialized');
 
     try {
@@ -176,7 +180,15 @@ class GemmaRepositoryImpl implements GemmaRepository {
         topK: 40,
       );
 
-      final formattedPrompt = _formatPrompt(prompt);
+      // --- ML KIT VISION PROCESSING ---
+      String imageContext = "";
+      if (imagePath != null && imagePath.isNotEmpty) {
+        print("🔍 Processing image with ML Kit before sending to Gemma...");
+        imageContext = await _imageService.analyzeImageContext(imagePath);
+        print("📸 Extracted Image Context: $imageContext");
+      }
+
+      final formattedPrompt = _formatPrompt(prompt, imageContext: imageContext);
       await session.addQueryChunk(Message.text(text: formattedPrompt, isUser: true));
 
       int garbageTokenCount = 0;
@@ -208,9 +220,15 @@ class GemmaRepositoryImpl implements GemmaRepository {
     }
   }
 
-  String _formatPrompt(String userInput) {
+  // UPDATED: Dynamically injects image context into the prompt
+  String _formatPrompt(String userInput, {String imageContext = ""}) {
+    String finalInput = userInput;
+    if (imageContext.isNotEmpty) {
+      finalInput = "$imageContext\nUser's prompt regarding the image: $userInput";
+    }
+
     return '''<start_of_turn>user
-$userInput
+$finalInput
 
 IMPORTANT: Keep your response short, concise, and to the point. Do not give long explanations. Limit to 1-2 sentences if possible.<end_of_turn>
 <start_of_turn>model

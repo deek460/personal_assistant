@@ -9,8 +9,8 @@ class GenerateResponseUseCase {
     return await repository.generateResponse(prompt);
   }
 
-  // ADD this new streaming method
-  Stream<String> callStreaming(String prompt) async* {
-    yield* repository.generateResponseStream(prompt);
+  // UPDATED to accept imagePath
+  Stream<String> callStreaming(String prompt, {String? imagePath}) async* {
+    yield* repository.generateResponseStream(prompt, imagePath: imagePath);
   }
 }

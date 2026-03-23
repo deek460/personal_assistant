@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import '../../data/models/voice_chat_message.dart';
 
@@ -40,6 +41,32 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble> {
             child: Column(
               crossAxisAlignment: message.isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
               children: [
+
+                // --- IMAGE DISPLAY ---
+                if (message.imagePath != null)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 6),
+                    constraints: const BoxConstraints(maxHeight: 200, maxWidth: 220),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.grey.shade300),
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.file(
+                        File(message.imagePath!),
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) {
+                          return Container(
+                            height: 100, width: 100, color: Colors.grey[200],
+                            child: const Icon(Icons.broken_image, color: Colors.grey),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+
+                // --- TEXT BUBBLE ---
                 Stack(
                   children: [
                     Container(

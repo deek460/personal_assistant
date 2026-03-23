@@ -1,7 +1,9 @@
-import 'package:flutter/foundation.dart'; // For kDebugMode
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart'; // NEW IMPORT
+import 'dart:io'; // NEW IMPORT
 import '../../../../core/navigation/app_router.dart';
 import '../../../../core/services/speech_to_text_service.dart';
 import '../../../../core/services/text_to_speech_service.dart';
@@ -47,13 +49,11 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
 
   // --- SETTINGS DIALOG ---
   void _showSettingsDialog(BuildContext context) {
-    // Capture the cubit instance from the parent context
     final cubit = context.read<VoiceCubit>();
 
     showDialog(
       context: context,
       builder: (ctx) {
-        // Use a local builder to refresh dialog content when lists change
         return StatefulBuilder(
           builder: (context, setDialogState) {
             final wakeWords = cubit.wakeWords;
@@ -61,7 +61,6 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
             final voices = cubit.availableVoices;
             final currentVoice = cubit.currentVoice;
 
-            // Voice Dropdown Value Logic
             Map<Object?, Object?>? selectedVoiceValue;
             if (currentVoice != null) {
               try {
@@ -83,7 +82,6 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // --- Wake Words Section ---
                       const Text("Active Wake Word", style: TextStyle(fontWeight: FontWeight.bold)),
                       const SizedBox(height: 8),
                       DropdownButton<String>(
@@ -94,7 +92,7 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                           return DropdownMenuItem<String>(
                             value: word,
                             child: Text(
-                              word[0].toUpperCase() + word.substring(1), // Capitalize
+                              word[0].toUpperCase() + word.substring(1),
                             ),
                           );
                         }).toList(),
@@ -153,7 +151,6 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
 
                       const Divider(height: 32),
 
-                      // --- Voice Selection Section ---
                       const Text("Assistant Voice", style: TextStyle(fontWeight: FontWeight.bold)),
                       const SizedBox(height: 4),
                       const Text("Filtered: US, UK & India", style: TextStyle(fontSize: 10, color: Colors.grey)),
@@ -186,7 +183,6 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
 
                       const SizedBox(height: 24),
 
-                      // --- Offline Instructions ---
                       Container(
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
@@ -258,7 +254,6 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                   },
                 ),
                 actions: [
-                  // SETTINGS BUTTON
                   IconButton(
                     icon: const Icon(Icons.settings),
                     tooltip: 'Settings',
@@ -303,34 +298,86 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
 
                   Expanded(child: _VoiceChatBody(scrollController: _scrollController)),
 
-                  // --- DEBUG INPUT FIELD ---
+                  // --- INPUT & MEDIA BAR ---
                   Container(
                     color: Colors.grey.shade100,
                     padding: const EdgeInsets.all(8.0),
-                    child: Row(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text("Debug:", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: TextField(
-                            key: const Key('debug_input'),
-                            controller: _debugInputController,
-                            decoration: const InputDecoration(
-                              hintText: "Inject Text Command",
-                              border: OutlineInputBorder(),
-                              contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 0),
-                            ),
-                          ),
-                        ),
-                        IconButton(
-                          key: const Key('debug_send'),
-                          icon: const Icon(Icons.send, color: Colors.blue),
-                          onPressed: () {
-                            if (_debugInputController.text.isNotEmpty) {
-                              context.read<VoiceCubit>().processTextCommand(_debugInputController.text);
-                              _debugInputController.clear();
-                            }
+                        // IMAGE PREVIEW AREA
+                        BlocBuilder<VoiceCubit, VoiceState>(
+                          builder: (context, state) {
+                            final pendingImage = state.pendingImagePath;
+                            if (pendingImage == null) return const SizedBox.shrink();
+
+                            return Stack(
+                              clipBehavior: Clip.none,
+                              children: [
+                                Container(
+                                  margin: const EdgeInsets.only(bottom: 8, left: 8),
+                                  height: 70,
+                                  width: 70,
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(color: Colors.blue, width: 2),
+                                    image: DecorationImage(
+                                      image: FileImage(File(pendingImage)),
+                                      fit: BoxFit.cover,
+                                    ),
+                                  ),
+                                ),
+                                Positioned(
+                                  top: -12,
+                                  right: -12,
+                                  child: IconButton(
+                                    icon: const Icon(Icons.cancel, color: Colors.red),
+                                    onPressed: () => context.read<VoiceCubit>().clearPendingImage(),
+                                  ),
+                                )
+                              ],
+                            );
                           },
+                        ),
+
+                        // TEXT & MEDIA CONTROLS
+                        Row(
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.camera_alt, color: Colors.blueGrey),
+                              onPressed: () {
+                                context.read<VoiceCubit>().pickImage(ImageSource.camera);
+                              },
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.photo_library, color: Colors.blueGrey),
+                              onPressed: () {
+                                context.read<VoiceCubit>().pickImage(ImageSource.gallery);
+                              },
+                            ),
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: TextField(
+                                key: const Key('debug_input'),
+                                controller: _debugInputController,
+                                decoration: const InputDecoration(
+                                  hintText: "Type or ask about an image...",
+                                  border: OutlineInputBorder(),
+                                  contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              key: const Key('debug_send'),
+                              icon: const Icon(Icons.send, color: Colors.blue),
+                              onPressed: () {
+                                if (_debugInputController.text.isNotEmpty) {
+                                  context.read<VoiceCubit>().processTextCommand(_debugInputController.text);
+                                  _debugInputController.clear();
+                                }
+                              },
+                            ),
+                          ],
                         ),
                       ],
                     ),
