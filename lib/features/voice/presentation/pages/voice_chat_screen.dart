@@ -2,8 +2,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
-import 'package:image_picker/image_picker.dart'; // NEW IMPORT
-import 'dart:io'; // NEW IMPORT
+import 'package:image_picker/image_picker.dart';
+import 'dart:io';
 import '../../../../core/navigation/app_router.dart';
 import '../../../../core/services/speech_to_text_service.dart';
 import '../../../../core/services/text_to_speech_service.dart';
@@ -48,183 +48,189 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
   }
 
   // --- SETTINGS DIALOG ---
-  void _showSettingsDialog(BuildContext context) {
-    final cubit = context.read<VoiceCubit>();
+  void _showSettingsDialog(BuildContext parentContext) {
+    // Capture the cubit from the parent screen's context
+    final cubit = parentContext.read<VoiceCubit>();
 
     showDialog(
-      context: context,
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            final wakeWords = cubit.wakeWords;
-            final selectedWakeWord = cubit.selectedWakeWord;
-            final voices = cubit.availableVoices;
-            final currentVoice = cubit.currentVoice;
+      context: parentContext,
+      builder: (dialogCtx) {
+        // FIX: Inject the existing cubit into the new Dialog Route
+        // This permanently fixes the ProviderNotFoundException
+        return BlocProvider.value(
+          value: cubit,
+          child: StatefulBuilder(
+            builder: (statefulCtx, setDialogState) {
+              final wakeWords = cubit.wakeWords;
+              final selectedWakeWord = cubit.selectedWakeWord;
+              final voices = cubit.availableVoices;
+              final currentVoice = cubit.currentVoice;
 
-            Map<Object?, Object?>? selectedVoiceValue;
-            if (currentVoice != null) {
-              try {
-                selectedVoiceValue = voices.firstWhere(
-                        (v) => (v as Map)['name'] == currentVoice['name'],
-                    orElse: () => null
-                ) as Map<Object?, Object?>?;
-              } catch (e) { /* ignore */ }
-            }
+              Map<Object?, Object?>? selectedVoiceValue;
+              if (currentVoice != null) {
+                try {
+                  selectedVoiceValue = voices.firstWhere(
+                          (v) => (v as Map)['name'] == currentVoice['name'],
+                      orElse: () => null
+                  ) as Map<Object?, Object?>?;
+                } catch (e) { /* ignore */ }
+              }
 
-            final TextEditingController wakeWordController = TextEditingController();
+              final TextEditingController wakeWordController = TextEditingController();
 
-            return AlertDialog(
-              title: const Text("Voice Settings"),
-              content: SizedBox(
-                width: double.maxFinite,
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text("Active Wake Word", style: TextStyle(fontWeight: FontWeight.bold)),
-                      const SizedBox(height: 8),
-                      DropdownButton<String>(
-                        isExpanded: true,
-                        value: wakeWords.contains(selectedWakeWord) ? selectedWakeWord : null,
-                        hint: const Text("Select Wake Word"),
-                        items: wakeWords.map((word) {
-                          return DropdownMenuItem<String>(
-                            value: word,
-                            child: Text(
-                              word[0].toUpperCase() + word.substring(1),
-                            ),
-                          );
-                        }).toList(),
-                        onChanged: (newWord) async {
-                          if (newWord != null) {
-                            await cubit.setSelectedWakeWord(newWord);
-                            setDialogState(() {});
-                          }
-                        },
-                      ),
-
-                      const SizedBox(height: 16),
-                      const Text("Add New Wake Word", style: TextStyle(fontWeight: FontWeight.bold)),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: TextField(
-                              controller: wakeWordController,
-                              decoration: const InputDecoration(
-                                hintText: "e.g., Jarvis",
-                                isDense: true,
-                                contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                              ),
-                            ),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.add_circle, color: Colors.blue),
-                            onPressed: () async {
-                              if (wakeWordController.text.isNotEmpty) {
-                                await cubit.addWakeWord(wakeWordController.text);
-                                wakeWordController.clear();
-                                setDialogState(() {});
-                              }
-                            },
-                          )
-                        ],
-                      ),
-
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8.0,
-                        runSpacing: 4.0,
-                        children: wakeWords.map((word) {
-                          final isSelected = word == selectedWakeWord;
-                          return Chip(
-                            label: Text(word),
-                            backgroundColor: isSelected ? Colors.blue.withAlpha(50) : null,
-                            deleteIcon: isSelected ? null : const Icon(Icons.close, size: 16),
-                            onDeleted: isSelected ? null : () async {
-                              await cubit.removeWakeWord(word);
-                              setDialogState(() {});
-                            },
-                          );
-                        }).toList(),
-                      ),
-
-                      const Divider(height: 32),
-
-                      const Text("Assistant Voice", style: TextStyle(fontWeight: FontWeight.bold)),
-                      const SizedBox(height: 4),
-                      const Text("Filtered: US, UK & India", style: TextStyle(fontSize: 10, color: Colors.grey)),
-                      const SizedBox(height: 8),
-
-                      if (voices.isEmpty)
-                        const Text("No compatible voices found.", style: TextStyle(color: Colors.red))
-                      else
-                        DropdownButton<Map<Object?, Object?>>(
+              return AlertDialog(
+                title: const Text("Voice Settings"),
+                content: SizedBox(
+                  width: double.maxFinite,
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text("Active Wake Word", style: TextStyle(fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 8),
+                        DropdownButton<String>(
                           isExpanded: true,
-                          value: selectedVoiceValue,
-                          hint: const Text("Select Voice"),
-                          items: voices.map((voice) {
-                            final map = voice as Map;
-                            return DropdownMenuItem<Map<Object?, Object?>>(
-                              value: map,
+                          value: wakeWords.contains(selectedWakeWord) ? selectedWakeWord : null,
+                          hint: const Text("Select Wake Word"),
+                          items: wakeWords.map((word) {
+                            return DropdownMenuItem<String>(
+                              value: word,
                               child: Text(
-                                "${map['name']} (${map['locale']})",
-                                overflow: TextOverflow.ellipsis,
+                                word[0].toUpperCase() + word.substring(1),
                               ),
                             );
                           }).toList(),
-                          onChanged: (newVoice) async {
-                            if (newVoice != null) {
-                              await cubit.updateVoice(Map<String,String>.from(newVoice));
+                          onChanged: (newWord) async {
+                            if (newWord != null) {
+                              await cubit.setSelectedWakeWord(newWord);
                               setDialogState(() {});
                             }
                           },
                         ),
 
-                      const SizedBox(height: 24),
-
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.grey.withAlpha(20),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.grey.withAlpha(50)),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                        const SizedBox(height: 16),
+                        const Text("Add New Wake Word", style: TextStyle(fontWeight: FontWeight.bold)),
+                        Row(
                           children: [
-                            Row(
-                              children: const [
-                                Icon(Icons.offline_pin, size: 16, color: Colors.green),
-                                SizedBox(width: 8),
-                                Text("Offline Usage", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                              ],
+                            Expanded(
+                              child: TextField(
+                                controller: wakeWordController,
+                                decoration: const InputDecoration(
+                                  hintText: "e.g., Jarvis",
+                                  isDense: true,
+                                  contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                                ),
+                              ),
                             ),
-                            const SizedBox(height: 4),
-                            const Text(
-                              "To use voices offline, ensure you have downloaded the language pack in your device settings:",
-                              style: TextStyle(fontSize: 11),
-                            ),
-                            const SizedBox(height: 4),
-                            const Text(
-                              "Settings > Accessibility > Text-to-Speech > Install Voice Data",
-                              style: TextStyle(fontSize: 11, fontStyle: FontStyle.italic, color: Colors.blueGrey),
-                            ),
+                            IconButton(
+                              icon: const Icon(Icons.add_circle, color: Colors.blue),
+                              onPressed: () async {
+                                if (wakeWordController.text.isNotEmpty) {
+                                  await cubit.addWakeWord(wakeWordController.text);
+                                  wakeWordController.clear();
+                                  setDialogState(() {});
+                                }
+                              },
+                            )
                           ],
                         ),
-                      )
-                    ],
+
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8.0,
+                          runSpacing: 4.0,
+                          children: wakeWords.map((word) {
+                            final isSelected = word == selectedWakeWord;
+                            return Chip(
+                              label: Text(word),
+                              backgroundColor: isSelected ? Colors.blue.withAlpha(50) : null,
+                              deleteIcon: isSelected ? null : const Icon(Icons.close, size: 16),
+                              onDeleted: isSelected ? null : () async {
+                                await cubit.removeWakeWord(word);
+                                setDialogState(() {});
+                              },
+                            );
+                          }).toList(),
+                        ),
+
+                        const Divider(height: 32),
+
+                        const Text("Assistant Voice", style: TextStyle(fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 4),
+                        const Text("Filtered: US, UK & India", style: TextStyle(fontSize: 10, color: Colors.grey)),
+                        const SizedBox(height: 8),
+
+                        if (voices.isEmpty)
+                          const Text("No compatible voices found.", style: TextStyle(color: Colors.red))
+                        else
+                          DropdownButton<Map<Object?, Object?>>(
+                            isExpanded: true,
+                            value: selectedVoiceValue,
+                            hint: const Text("Select Voice"),
+                            items: voices.map((voice) {
+                              final map = voice as Map;
+                              return DropdownMenuItem<Map<Object?, Object?>>(
+                                value: map,
+                                child: Text(
+                                  "${map['name']} (${map['locale']})",
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              );
+                            }).toList(),
+                            onChanged: (newVoice) async {
+                              if (newVoice != null) {
+                                await cubit.updateVoice(Map<String,String>.from(newVoice));
+                                setDialogState(() {});
+                              }
+                            },
+                          ),
+
+                        const SizedBox(height: 24),
+
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.grey.withAlpha(20),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.grey.withAlpha(50)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: const [
+                                  Icon(Icons.offline_pin, size: 16, color: Colors.green),
+                                  SizedBox(width: 8),
+                                  Text("Offline Usage", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              const Text(
+                                "To use voices offline, ensure you have downloaded the language pack in your device settings:",
+                                style: TextStyle(fontSize: 11),
+                              ),
+                              const SizedBox(height: 4),
+                              const Text(
+                                "Settings > Accessibility > Text-to-Speech > Install Voice Data",
+                                style: TextStyle(fontSize: 11, fontStyle: FontStyle.italic, color: Colors.blueGrey),
+                              ),
+                            ],
+                          ),
+                        )
+                      ],
+                    ),
                   ),
                 ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text("Close"),
-                ),
-              ],
-            );
-          },
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(statefulCtx).pop(),
+                    child: const Text("Close"),
+                  ),
+                ],
+              );
+            },
+          ),
         );
       },
     );
@@ -277,6 +283,7 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                 children: [
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                    // FIX: Restored to Expanded inside Row to prevent infinite width crash
                     child: Row(
                       children: [
                         Expanded(

@@ -57,43 +57,47 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
   }
 
   Future<void> _handleAddModel() async {
+    // Capture the cubit to pass to the dialog
+    final cubit = context.read<VoiceCubit>();
     final nameController = TextEditingController();
 
     final name = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Add New Model'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('Enter a name for your model, then select the file.'),
-            const SizedBox(height: 16),
-            TextField(
-              controller: nameController,
-              decoration: const InputDecoration(
-                labelText: 'Model Name',
-                border: OutlineInputBorder(),
+      builder: (dialogContext) => BlocProvider.value(
+        value: cubit, // Provide cubit to fix ProviderNotFoundException
+        child: AlertDialog(
+          title: const Text('Add New Model'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Enter a name for your model, then select the file.'),
+              const SizedBox(height: 16),
+              TextField(
+                controller: nameController,
+                decoration: const InputDecoration(
+                  labelText: 'Model Name',
+                  border: OutlineInputBorder(),
+                ),
               ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(dialogContext, nameController.text.trim()),
+              child: const Text('Select File'),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, nameController.text.trim()),
-            child: const Text('Select File'),
-          ),
-        ],
       ),
     );
 
     if (name == null) return;
 
     if (mounted) {
-      final cubit = context.read<VoiceCubit>();
       final newModel = await cubit.pickAndAddModel(customName: name.isEmpty ? null : name);
 
       if (newModel != null) {
@@ -104,8 +108,9 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
     }
   }
 
-  // RESTORED: Delete functionality
   Future<void> _showDeleteConfirmation(AIModel model) async {
+    final cubit = context.read<VoiceCubit>();
+
     if (model.isDefault) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Cannot delete default model')),
@@ -115,19 +120,22 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
 
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete Model'),
-        content: Text('Are you sure you want to delete "${model.name}"?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Delete'),
-          ),
-        ],
+      builder: (dialogContext) => BlocProvider.value(
+        value: cubit, // Provide cubit to fix ProviderNotFoundException
+        child: AlertDialog(
+          title: const Text('Delete Model'),
+          content: Text('Are you sure you want to delete "${model.name}"?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Delete'),
+            ),
+          ],
+        ),
       ),
     );
 
@@ -135,13 +143,12 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
       await _modelService.deleteModel(model.id);
       await _loadModels();
 
-      // If the deleted model was the currently selected one, switch to default
       if (widget.selectedModel?.id == model.id) {
         final defaultModel = _models.where((m) => m.isDefault).firstOrNull;
         if (defaultModel != null) {
           widget.onModelSelected(defaultModel);
           if (mounted) {
-            context.read<VoiceCubit>().switchModel(defaultModel);
+            cubit.switchModel(defaultModel);
           }
         }
       }
@@ -157,7 +164,6 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
       );
     }
 
-    // Ensure currently selected model is valid for the dropdown
     String? dropdownValue = widget.selectedModel?.id;
     if (_models.isEmpty || !_models.any((m) => m.id == dropdownValue)) {
       dropdownValue = null;
@@ -173,21 +179,22 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
         child: DropdownButton<String>(
           value: dropdownValue,
           isExpanded: true,
+          itemHeight: null, // FIX: Removes the strict 48px height constraint
           hint: const Padding(
-            padding: EdgeInsets.all(12),
+            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
             child: Text('Select Model'),
           ),
           items: [
             ..._models.map((model) => DropdownMenuItem<String>(
               value: model.id,
-              // Wrapped in GestureDetector for long-press delete
               child: GestureDetector(
                 onLongPress: () => _showDeleteConfirmation(model),
                 child: Padding(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), // Adjusted vertical padding
                   child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Expanded(
+                      Flexible(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisSize: MainAxisSize.min,
@@ -195,6 +202,7 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
                             Text(
                               model.name,
                               style: const TextStyle(fontWeight: FontWeight.w500),
+                              overflow: TextOverflow.ellipsis,
                             ),
                             if (!model.isDefault)
                               Text(
@@ -210,6 +218,7 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
                       ),
                       if (model.isDefault)
                         Container(
+                          margin: const EdgeInsets.only(left: 8),
                           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                           decoration: BoxDecoration(
                             color: Colors.blue.shade100,
@@ -231,7 +240,7 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
             const DropdownMenuItem<String>(
               value: 'ADD_NEW_MODEL',
               child: Padding(
-                padding: EdgeInsets.all(12),
+                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 child: Row(
                   children: [
                     Icon(Icons.add_circle_outline, color: Colors.blue),
