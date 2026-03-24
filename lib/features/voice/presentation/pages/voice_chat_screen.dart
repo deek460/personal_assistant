@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:camera/camera.dart';
 import 'dart:io';
 import '../../../../core/navigation/app_router.dart';
 import '../../../../core/services/speech_to_text_service.dart';
@@ -29,6 +30,9 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
   final TextEditingController _debugInputController = TextEditingController();
   AIModel? _selectedModel;
 
+  // NEW: State to track full screen vision mode
+  bool _isFullScreenVision = false;
+
   @override
   void initState() {
     super.initState();
@@ -47,16 +51,12 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
     setState(() => _selectedModel = model);
   }
 
-  // --- SETTINGS DIALOG ---
   void _showSettingsDialog(BuildContext parentContext) {
-    // Capture the cubit from the parent screen's context
     final cubit = parentContext.read<VoiceCubit>();
 
     showDialog(
       context: parentContext,
       builder: (dialogCtx) {
-        // FIX: Inject the existing cubit into the new Dialog Route
-        // This permanently fixes the ProviderNotFoundException
         return BlocProvider.value(
           value: cubit,
           child: StatefulBuilder(
@@ -279,117 +279,228 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                   ),
                 ],
               ),
-              body: Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                    // FIX: Restored to Expanded inside Row to prevent infinite width crash
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: ModelSelectorDropdown(
-                            selectedModel: _selectedModel,
-                            onModelSelected: (model) {
-                              setState(() => _selectedModel = model);
-                              context.read<VoiceCubit>().switchModel(model);
+              body: BlocConsumer<VoiceCubit, VoiceState>(
+                  listenWhen: (previous, current) => previous.isLiveVisionEnabled != current.isLiveVisionEnabled,
+                  listener: (context, state) {
+                    // Exit full screen automatically if Live Vision is turned off
+                    if (!state.isLiveVisionEnabled && _isFullScreenVision) {
+                      setState(() => _isFullScreenVision = false);
+                    }
+                  },
+                  builder: (context, state) {
+                    final isCameraReady = state.isLiveVisionEnabled && state.cameraController?.value.isInitialized == true;
 
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text('Switching to: ${model.name}...')),
-                              );
-                            },
+                    // Define dynamic colors based on fullscreen mode
+                    final Color inputBgColor = _isFullScreenVision ? Colors.black87 : Colors.grey.shade100;
+                    final Color iconColor = _isFullScreenVision ? Colors.white70 : Colors.blueGrey;
+                    final Color hintColor = _isFullScreenVision ? Colors.white54 : Colors.black54;
+                    final Color textColor = _isFullScreenVision ? Colors.white : Colors.black;
+
+                    return Stack(
+                      children: [
+                        // --- FULL SCREEN CAMERA BACKGROUND ---
+                        if (isCameraReady && _isFullScreenVision)
+                          Positioned.fill(
+                            child: Container(
+                              color: Colors.black,
+                              // Center keeps the camera at its native aspect ratio
+                              // Empty space around it will naturally become black letterboxing
+                              child: Center(
+                                child: CameraPreview(state.cameraController!),
+                              ),
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
-                  ),
 
-                  Expanded(child: _VoiceChatBody(scrollController: _scrollController)),
-
-                  // --- INPUT & MEDIA BAR ---
-                  Container(
-                    color: Colors.grey.shade100,
-                    padding: const EdgeInsets.all(8.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // IMAGE PREVIEW AREA
-                        BlocBuilder<VoiceCubit, VoiceState>(
-                          builder: (context, state) {
-                            final pendingImage = state.pendingImagePath;
-                            if (pendingImage == null) return const SizedBox.shrink();
-
-                            return Stack(
-                              clipBehavior: Clip.none,
+                        // --- FOREGROUND UI ---
+                        Positioned.fill(
+                          child: Container(
+                            // Transparent overlay so the camera feed and letterboxes are clearly visible
+                            color: Colors.transparent,
+                            child: Column(
                               children: [
+                                // --- MODEL SELECTOR ---
                                 Container(
-                                  margin: const EdgeInsets.only(bottom: 8, left: 8),
-                                  height: 70,
-                                  width: 70,
-                                  decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(color: Colors.blue, width: 2),
-                                    image: DecorationImage(
-                                      image: FileImage(File(pendingImage)),
-                                      fit: BoxFit.cover,
+                                  color: _isFullScreenVision ? Colors.black54 : Colors.transparent,
+                                  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                                  child: SizedBox(
+                                    width: double.infinity,
+                                    child: ModelSelectorDropdown(
+                                      selectedModel: _selectedModel,
+                                      onModelSelected: (model) {
+                                        setState(() => _selectedModel = model);
+                                        context.read<VoiceCubit>().switchModel(model);
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(content: Text('Switching to: ${model.name}...')),
+                                        );
+                                      },
                                     ),
                                   ),
                                 ),
-                                Positioned(
-                                  top: -12,
-                                  right: -12,
-                                  child: IconButton(
-                                    icon: const Icon(Icons.cancel, color: Colors.red),
-                                    onPressed: () => context.read<VoiceCubit>().clearPendingImage(),
-                                  ),
-                                )
-                              ],
-                            );
-                          },
-                        ),
 
-                        // TEXT & MEDIA CONTROLS
-                        Row(
-                          children: [
-                            IconButton(
-                              icon: const Icon(Icons.camera_alt, color: Colors.blueGrey),
-                              onPressed: () {
-                                context.read<VoiceCubit>().pickImage(ImageSource.camera);
-                              },
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.photo_library, color: Colors.blueGrey),
-                              onPressed: () {
-                                context.read<VoiceCubit>().pickImage(ImageSource.gallery);
-                              },
-                            ),
-                            const SizedBox(width: 4),
-                            Expanded(
-                              child: TextField(
-                                key: const Key('debug_input'),
-                                controller: _debugInputController,
-                                decoration: const InputDecoration(
-                                  hintText: "Type or ask about an image...",
-                                  border: OutlineInputBorder(),
-                                  contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+                                // --- CHAT HISTORY & PIP CAMERA ---
+                                Expanded(
+                                  child: Stack(
+                                    children: [
+                                      _VoiceChatBody(scrollController: _scrollController, isFullScreen: _isFullScreenVision),
+
+                                      // Live Vision PiP Preview (When Fullscreen is OFF)
+                                      if (isCameraReady && !_isFullScreenVision)
+                                        Positioned(
+                                          top: 16,
+                                          right: 16,
+                                          width: 100,
+                                          height: 140,
+                                          child: Stack(
+                                            clipBehavior: Clip.none,
+                                            children: [
+                                              Container(
+                                                width: double.infinity,
+                                                height: double.infinity,
+                                                decoration: BoxDecoration(
+                                                    borderRadius: BorderRadius.circular(12),
+                                                    border: Border.all(color: Colors.green, width: 3),
+                                                    boxShadow: const [
+                                                      BoxShadow(color: Colors.black26, blurRadius: 8, spreadRadius: 2)
+                                                    ]
+                                                ),
+                                                child: ClipRRect(
+                                                  borderRadius: BorderRadius.circular(9),
+                                                  child: CameraPreview(state.cameraController!),
+                                                ),
+                                              ),
+                                              // Expand to Fullscreen Button
+                                              Positioned(
+                                                bottom: 4,
+                                                right: 4,
+                                                child: GestureDetector(
+                                                  onTap: () => setState(() => _isFullScreenVision = true),
+                                                  child: Container(
+                                                    padding: const EdgeInsets.all(4),
+                                                    decoration: const BoxDecoration(
+                                                      color: Colors.black54,
+                                                      shape: BoxShape.circle,
+                                                    ),
+                                                    child: const Icon(Icons.fullscreen, color: Colors.white, size: 20),
+                                                  ),
+                                                ),
+                                              )
+                                            ],
+                                          ),
+                                        ),
+
+                                      // Collapse Fullscreen Button (When Fullscreen is ON)
+                                      if (isCameraReady && _isFullScreenVision)
+                                        Positioned(
+                                          top: 16,
+                                          right: 16,
+                                          child: IconButton(
+                                            icon: const Icon(Icons.fullscreen_exit, color: Colors.white, size: 32, shadows: [Shadow(color: Colors.black, blurRadius: 4)]),
+                                            onPressed: () => setState(() => _isFullScreenVision = false),
+                                          ),
+                                        )
+                                    ],
+                                  ),
                                 ),
-                              ),
+
+                                // --- INPUT & MEDIA BAR ---
+                                Container(
+                                  color: inputBgColor,
+                                  padding: const EdgeInsets.all(8.0),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      // STATIC IMAGE PREVIEW AREA
+                                      if (state.pendingImagePath != null)
+                                        Stack(
+                                          clipBehavior: Clip.none,
+                                          children: [
+                                            Container(
+                                              margin: const EdgeInsets.only(bottom: 8, left: 8),
+                                              height: 70,
+                                              width: 70,
+                                              decoration: BoxDecoration(
+                                                borderRadius: BorderRadius.circular(8),
+                                                border: Border.all(color: Colors.blue, width: 2),
+                                                image: DecorationImage(
+                                                  image: FileImage(File(state.pendingImagePath!)),
+                                                  fit: BoxFit.cover,
+                                                ),
+                                              ),
+                                            ),
+                                            Positioned(
+                                              top: -12,
+                                              right: -12,
+                                              child: IconButton(
+                                                icon: const Icon(Icons.cancel, color: Colors.red),
+                                                onPressed: () => context.read<VoiceCubit>().clearPendingImage(),
+                                              ),
+                                            )
+                                          ],
+                                        ),
+
+                                      // TEXT & MEDIA CONTROLS
+                                      Row(
+                                        children: [
+                                          // LIVE VISION TOGGLE
+                                          IconButton(
+                                            icon: Icon(
+                                              state.isLiveVisionEnabled ? Icons.visibility : Icons.visibility_off,
+                                              color: state.isLiveVisionEnabled ? Colors.green : iconColor,
+                                            ),
+                                            tooltip: 'Toggle Live Vision',
+                                            onPressed: () {
+                                              context.read<VoiceCubit>().toggleLiveVision();
+                                            },
+                                          ),
+                                          IconButton(
+                                            icon: Icon(Icons.camera_alt, color: iconColor),
+                                            onPressed: () {
+                                              context.read<VoiceCubit>().pickImage(ImageSource.camera);
+                                            },
+                                          ),
+                                          IconButton(
+                                            icon: Icon(Icons.photo_library, color: iconColor),
+                                            onPressed: () {
+                                              context.read<VoiceCubit>().pickImage(ImageSource.gallery);
+                                            },
+                                          ),
+                                          const SizedBox(width: 4),
+                                          Expanded(
+                                            child: TextField(
+                                              key: const Key('debug_input'),
+                                              controller: _debugInputController,
+                                              style: TextStyle(color: textColor),
+                                              decoration: InputDecoration(
+                                                hintText: "Type or ask about an image...",
+                                                hintStyle: TextStyle(color: hintColor),
+                                                border: const OutlineInputBorder(),
+                                                enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: iconColor.withAlpha(100))),
+                                                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+                                              ),
+                                            ),
+                                          ),
+                                          IconButton(
+                                            key: const Key('debug_send'),
+                                            icon: Icon(Icons.send, color: _isFullScreenVision ? Colors.blue.shade300 : Colors.blue),
+                                            onPressed: () {
+                                              if (_debugInputController.text.isNotEmpty) {
+                                                context.read<VoiceCubit>().processTextCommand(_debugInputController.text);
+                                                _debugInputController.clear();
+                                              }
+                                            },
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
                             ),
-                            IconButton(
-                              key: const Key('debug_send'),
-                              icon: const Icon(Icons.send, color: Colors.blue),
-                              onPressed: () {
-                                if (_debugInputController.text.isNotEmpty) {
-                                  context.read<VoiceCubit>().processTextCommand(_debugInputController.text);
-                                  _debugInputController.clear();
-                                }
-                              },
-                            ),
-                          ],
+                          ),
                         ),
                       ],
-                    ),
-                  ),
-                ],
+                    );
+                  }
               ),
             );
           }
@@ -400,8 +511,9 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
 
 class _VoiceChatBody extends StatelessWidget {
   final ScrollController scrollController;
+  final bool isFullScreen;
 
-  const _VoiceChatBody({required this.scrollController});
+  const _VoiceChatBody({required this.scrollController, required this.isFullScreen});
 
   void _triggerScroll() {
     Future.delayed(const Duration(milliseconds: 100), () {
@@ -486,7 +598,7 @@ class _VoiceChatBody extends StatelessWidget {
       margin: const EdgeInsets.symmetric(horizontal: 24),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
-        color: statusColor.withAlpha(38),
+        color: statusColor.withAlpha(isFullScreen ? 200 : 38), // More opaque in fullscreen
         borderRadius: BorderRadius.circular(20),
         border: Border.all(color: statusColor),
       ),
@@ -494,7 +606,7 @@ class _VoiceChatBody extends StatelessWidget {
         status,
         textAlign: TextAlign.center,
         style: TextStyle(
-          color: statusColor,
+          color: isFullScreen ? Colors.white : statusColor,
           fontWeight: FontWeight.bold,
         ),
       ),
@@ -502,6 +614,71 @@ class _VoiceChatBody extends StatelessWidget {
   }
 
   Widget _buildChatHistory(BuildContext context, VoiceState state) {
+    if (isFullScreen) {
+      VoiceChatMessage? lastUserMsg;
+      VoiceChatMessage? lastAiMsg;
+
+      // Determine if the AI is actively interacting
+      // Once it returns to listening or idle, showRecentMessages will be false
+      bool showRecentMessages = state is VoiceProcessing ||
+          state is VoiceStreamingResponse ||
+          state is VoiceResponseReady ||
+          state is VoiceSpeaking;
+
+      if (showRecentMessages && state.chatHistory.isNotEmpty) {
+        final lastMsg = state.chatHistory.last;
+        if (lastMsg.isUser) {
+          lastUserMsg = lastMsg;
+        } else {
+          lastAiMsg = lastMsg;
+          // Find the nearest user message prior to the AI's response
+          for (int i = state.chatHistory.length - 2; i >= 0; i--) {
+            if (state.chatHistory[i].isUser) {
+              lastUserMsg = state.chatHistory[i];
+              break;
+            }
+          }
+        }
+      }
+
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+        child: Column(
+          // MainAxisAlignment.spaceBetween pushes the User message to the top empty space
+          // and the AI message to the bottom empty space, safely framing the camera view.
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            if (lastUserMsg != null)
+              VoiceMessageBubble(message: lastUserMsg)
+            else
+              const SizedBox.shrink(),
+
+            if (state is VoiceListening && state.recognizedWords.isNotEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue.withAlpha(200),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue.withAlpha(100)),
+                ),
+                child: Text(
+                  'Hearing: ${state.recognizedWords}',
+                  style: const TextStyle(
+                      fontStyle: FontStyle.italic,
+                      color: Colors.white
+                  ),
+                ),
+              )
+            else if (lastAiMsg != null)
+              VoiceMessageBubble(message: lastAiMsg)
+            else
+              const SizedBox.shrink(),
+          ],
+        ),
+      );
+    }
+
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 24),
       decoration: BoxDecoration(
@@ -515,7 +692,10 @@ class _VoiceChatBody extends StatelessWidget {
                 ? const Center(
               child: Text(
                 'Say your wake word followed by your question!',
-                style: TextStyle(fontStyle: FontStyle.italic),
+                style: TextStyle(
+                    fontStyle: FontStyle.italic,
+                    color: Colors.black87
+                ),
               ),
             )
                 : ListView.builder(
@@ -540,7 +720,10 @@ class _VoiceChatBody extends StatelessWidget {
               ),
               child: Text(
                 'Hearing: ${state.recognizedWords}',
-                style: const TextStyle(fontStyle: FontStyle.italic),
+                style: const TextStyle(
+                    fontStyle: FontStyle.italic,
+                    color: Colors.black87
+                ),
               ),
             ),
         ],
@@ -583,10 +766,10 @@ class _VoiceChatBody extends StatelessWidget {
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           color: isListening
-              ? Colors.red.withAlpha(38)
+              ? Colors.red.withAlpha(isFullScreen ? 150 : 38)
               : isProcessing
-              ? Colors.orange.withAlpha(38)
-              : Colors.blue.withAlpha(38),
+              ? Colors.orange.withAlpha(isFullScreen ? 150 : 38)
+              : Colors.blue.withAlpha(isFullScreen ? 150 : 38),
           border: Border.all(
             color: isListening
                 ? Colors.red
@@ -603,11 +786,13 @@ class _VoiceChatBody extends StatelessWidget {
               ? Icons.sync
               : Icons.mic,
           size: 48,
-          color: isListening
-              ? Colors.red
-              : isProcessing
-              ? Colors.orange
-              : Colors.blue,
+          color: isFullScreen ? Colors.white : (
+              isListening
+                  ? Colors.red
+                  : isProcessing
+                  ? Colors.orange
+                  : Colors.blue
+          ),
         ),
       ),
     );
@@ -620,10 +805,10 @@ class _VoiceChatBody extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: Colors.red.withAlpha(38),
+          color: Colors.red.withAlpha(isFullScreen ? 150 : 38),
           border: Border.all(color: Colors.red, width: 2),
         ),
-        child: const Icon(Icons.volume_off, size: 32, color: Colors.red),
+        child: Icon(Icons.volume_off, size: 32, color: isFullScreen ? Colors.white : Colors.red),
       ),
     );
   }
@@ -635,10 +820,10 @@ class _VoiceChatBody extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: Colors.green.withAlpha(38),
+          color: Colors.green.withAlpha(isFullScreen ? 150 : 38),
           border: Border.all(color: Colors.green, width: 2),
         ),
-        child: const Icon(Icons.refresh, size: 32, color: Colors.green),
+        child: Icon(Icons.refresh, size: 32, color: isFullScreen ? Colors.white : Colors.green),
       ),
     );
   }

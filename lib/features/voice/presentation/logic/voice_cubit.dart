@@ -3,7 +3,8 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:image_picker/image_picker.dart'; // NEW IMPORT
+import 'package:image_picker/image_picker.dart';
+import 'package:camera/camera.dart'; // NEW IMPORT
 import '../../../../core/services/speech_to_text_service.dart';
 import '../../../../core/services/text_to_speech_service.dart';
 import '../../data/models/voice_chat_message.dart';
@@ -14,53 +15,75 @@ import '../../../../core/models/ai_model.dart';
 import '../../../../core/services/model_management_service.dart';
 import 'package:firebase_performance/firebase_performance.dart';
 
-// --- STATES UPDATED TO HOLD PENDING IMAGE PATH ---
+// --- STATES UPDATED TO HOLD CAMERA & LIVE VISION STATE ---
 abstract class VoiceState {
   final List<VoiceChatMessage> chatHistory;
   final String? pendingImagePath;
-  VoiceState(this.chatHistory, {this.pendingImagePath});
+  final bool isLiveVisionEnabled;
+  final CameraController? cameraController;
+
+  VoiceState(this.chatHistory, {this.pendingImagePath, this.isLiveVisionEnabled = false, this.cameraController});
 }
 
 class VoiceInitial extends VoiceState { VoiceInitial() : super([]); }
+
 class VoiceInitializing extends VoiceState {
   final String message;
-  VoiceInitializing(List<VoiceChatMessage> chatHistory, {this.message = "Initializing...", String? pendingImagePath}) : super(chatHistory, pendingImagePath: pendingImagePath);
+  VoiceInitializing(List<VoiceChatMessage> chatHistory, {this.message = "Initializing...", String? pendingImagePath, bool isLiveVisionEnabled = false, CameraController? cameraController})
+      : super(chatHistory, pendingImagePath: pendingImagePath, isLiveVisionEnabled: isLiveVisionEnabled, cameraController: cameraController);
 }
-class SpeechReady extends VoiceState { SpeechReady(List<VoiceChatMessage> chatHistory, {String? pendingImagePath}) : super(chatHistory, pendingImagePath: pendingImagePath); }
-class SpeechUnavailable extends VoiceState { SpeechUnavailable(List<VoiceChatMessage> chatHistory, {String? pendingImagePath}) : super(chatHistory, pendingImagePath: pendingImagePath); }
+class SpeechReady extends VoiceState {
+  SpeechReady(List<VoiceChatMessage> chatHistory, {String? pendingImagePath, bool isLiveVisionEnabled = false, CameraController? cameraController})
+      : super(chatHistory, pendingImagePath: pendingImagePath, isLiveVisionEnabled: isLiveVisionEnabled, cameraController: cameraController);
+}
+class SpeechUnavailable extends VoiceState {
+  SpeechUnavailable(List<VoiceChatMessage> chatHistory, {String? pendingImagePath, bool isLiveVisionEnabled = false, CameraController? cameraController})
+      : super(chatHistory, pendingImagePath: pendingImagePath, isLiveVisionEnabled: isLiveVisionEnabled, cameraController: cameraController);
+}
 class VoiceListening extends VoiceState {
   final String recognizedWords;
-  VoiceListening(this.recognizedWords, List<VoiceChatMessage> chatHistory, {String? pendingImagePath}) : super(chatHistory, pendingImagePath: pendingImagePath);
+  VoiceListening(this.recognizedWords, List<VoiceChatMessage> chatHistory, {String? pendingImagePath, bool isLiveVisionEnabled = false, CameraController? cameraController})
+      : super(chatHistory, pendingImagePath: pendingImagePath, isLiveVisionEnabled: isLiveVisionEnabled, cameraController: cameraController);
 }
 class VoiceProcessing extends VoiceState {
   final String inputText;
-  VoiceProcessing(this.inputText, List<VoiceChatMessage> chatHistory, {String? pendingImagePath}) : super(chatHistory, pendingImagePath: pendingImagePath);
+  VoiceProcessing(this.inputText, List<VoiceChatMessage> chatHistory, {String? pendingImagePath, bool isLiveVisionEnabled = false, CameraController? cameraController})
+      : super(chatHistory, pendingImagePath: pendingImagePath, isLiveVisionEnabled: isLiveVisionEnabled, cameraController: cameraController);
 }
 class VoiceStreamingResponse extends VoiceState {
   final String inputText;
   final String partialResponse;
   final bool isComplete;
-  VoiceStreamingResponse(this.inputText, this.partialResponse, this.isComplete, List<VoiceChatMessage> chatHistory, {String? pendingImagePath}) : super(chatHistory, pendingImagePath: pendingImagePath);
+  VoiceStreamingResponse(this.inputText, this.partialResponse, this.isComplete, List<VoiceChatMessage> chatHistory, {String? pendingImagePath, bool isLiveVisionEnabled = false, CameraController? cameraController})
+      : super(chatHistory, pendingImagePath: pendingImagePath, isLiveVisionEnabled: isLiveVisionEnabled, cameraController: cameraController);
 }
 class VoiceResponseReady extends VoiceState {
   final String inputText;
   final String responseText;
-  VoiceResponseReady(this.inputText, this.responseText, List<VoiceChatMessage> chatHistory, {String? pendingImagePath}) : super(chatHistory, pendingImagePath: pendingImagePath);
+  VoiceResponseReady(this.inputText, this.responseText, List<VoiceChatMessage> chatHistory, {String? pendingImagePath, bool isLiveVisionEnabled = false, CameraController? cameraController})
+      : super(chatHistory, pendingImagePath: pendingImagePath, isLiveVisionEnabled: isLiveVisionEnabled, cameraController: cameraController);
 }
 class VoiceSpeaking extends VoiceState {
   final String responseText;
-  VoiceSpeaking(this.responseText, List<VoiceChatMessage> chatHistory, {String? pendingImagePath}) : super(chatHistory, pendingImagePath: pendingImagePath);
+  VoiceSpeaking(this.responseText, List<VoiceChatMessage> chatHistory, {String? pendingImagePath, bool isLiveVisionEnabled = false, CameraController? cameraController})
+      : super(chatHistory, pendingImagePath: pendingImagePath, isLiveVisionEnabled: isLiveVisionEnabled, cameraController: cameraController);
 }
-class VoiceIdle extends VoiceState { VoiceIdle(List<VoiceChatMessage> chatHistory, {String? pendingImagePath}) : super(chatHistory, pendingImagePath: pendingImagePath); }
+class VoiceIdle extends VoiceState {
+  VoiceIdle(List<VoiceChatMessage> chatHistory, {String? pendingImagePath, bool isLiveVisionEnabled = false, CameraController? cameraController})
+      : super(chatHistory, pendingImagePath: pendingImagePath, isLiveVisionEnabled: isLiveVisionEnabled, cameraController: cameraController);
+}
 class VoiceError extends VoiceState {
   final String errorMessage;
-  VoiceError(this.errorMessage, List<VoiceChatMessage> chatHistory, {String? pendingImagePath}) : super(chatHistory, pendingImagePath: pendingImagePath);
+  VoiceError(this.errorMessage, List<VoiceChatMessage> chatHistory, {String? pendingImagePath, bool isLiveVisionEnabled = false, CameraController? cameraController})
+      : super(chatHistory, pendingImagePath: pendingImagePath, isLiveVisionEnabled: isLiveVisionEnabled, cameraController: cameraController);
 }
 class VoiceSettingsUpdated extends VoiceState {
-  VoiceSettingsUpdated(List<VoiceChatMessage> chatHistory, {String? pendingImagePath}) : super(chatHistory, pendingImagePath: pendingImagePath);
+  VoiceSettingsUpdated(List<VoiceChatMessage> chatHistory, {String? pendingImagePath, bool isLiveVisionEnabled = false, CameraController? cameraController})
+      : super(chatHistory, pendingImagePath: pendingImagePath, isLiveVisionEnabled: isLiveVisionEnabled, cameraController: cameraController);
 }
 class VoiceImageAttached extends VoiceState {
-  VoiceImageAttached(List<VoiceChatMessage> chatHistory, {String? pendingImagePath}) : super(chatHistory, pendingImagePath: pendingImagePath);
+  VoiceImageAttached(List<VoiceChatMessage> chatHistory, {String? pendingImagePath, bool isLiveVisionEnabled = false, CameraController? cameraController})
+      : super(chatHistory, pendingImagePath: pendingImagePath, isLiveVisionEnabled: isLiveVisionEnabled, cameraController: cameraController);
 }
 
 class VoiceCubit extends Cubit<VoiceState> {
@@ -75,9 +98,11 @@ class VoiceCubit extends Cubit<VoiceState> {
   static const Duration resetTimeout = Duration(milliseconds: 200);
   bool _isManualStop = false;
 
-  // -- Image State --
+  // -- Image & Camera State --
   String? _pendingImagePath;
   final ImagePicker _imagePicker = ImagePicker();
+  CameraController? _cameraController;
+  bool _isLiveVisionEnabled = false;
 
   // -- Settings State --
   List<String> _wakeWords = [];
@@ -91,12 +116,36 @@ class VoiceCubit extends Cubit<VoiceState> {
       this._generateResponseUseCase,
       ) : super(VoiceInitial());
 
-  // Getters for UI
   List<String> get wakeWords => _wakeWords;
   String get selectedWakeWord => _selectedWakeWord;
   List<dynamic> get availableVoices => _availableVoices;
   Map<String, String>? get currentVoice => _currentVoice;
   String? get pendingImagePath => _pendingImagePath;
+  bool get isLiveVisionEnabled => _isLiveVisionEnabled;
+  CameraController? get cameraController => _cameraController;
+
+  // --- Live Vision Toggle ---
+  Future<void> toggleLiveVision() async {
+    if (_isLiveVisionEnabled) {
+      _isLiveVisionEnabled = false;
+      await _cameraController?.dispose();
+      _cameraController = null;
+      emit(VoiceIdle(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
+    } else {
+      try {
+        final cameras = await availableCameras();
+        if (cameras.isNotEmpty) {
+          // Initialize camera without audio to save resources
+          _cameraController = CameraController(cameras.first, ResolutionPreset.medium, enableAudio: false);
+          await _cameraController!.initialize();
+          _isLiveVisionEnabled = true;
+          emit(VoiceIdle(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
+        }
+      } catch (e) {
+        emit(VoiceError("Failed to start camera: $e", _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
+      }
+    }
+  }
 
   // --- Image Handling Methods ---
   Future<void> pickImage(ImageSource source) async {
@@ -104,28 +153,36 @@ class VoiceCubit extends Cubit<VoiceState> {
       final XFile? image = await _imagePicker.pickImage(source: source);
       if (image != null) {
         _pendingImagePath = image.path;
-        emit(VoiceImageAttached(_chatHistory, pendingImagePath: _pendingImagePath));
+        emit(VoiceImageAttached(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
 
-        // Let the user know the image is ready
         await _ttsService.speak("Image attached. Ask me about it.");
         if (!_isManualStop) await startListening();
       }
     } catch (e) {
-      emit(VoiceError("Failed to attach image: $e", _chatHistory, pendingImagePath: _pendingImagePath));
+      emit(VoiceError("Failed to attach image: $e", _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
     }
   }
 
   void clearPendingImage() {
     _pendingImagePath = null;
-    emit(VoiceIdle(_chatHistory, pendingImagePath: _pendingImagePath));
+    emit(VoiceIdle(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
   }
 
   Future<void> processTextCommand(String command) async {
     print("VoiceCubit: Processing injected command: $command");
 
-    // Capture image before clearing it from the pending state
-    final attachedImage = _pendingImagePath;
+    String? attachedImage = _pendingImagePath;
     _pendingImagePath = null;
+
+    // Trigger instant capture if Live Vision is ON and no static image is pending
+    if (_isLiveVisionEnabled && attachedImage == null && _cameraController != null && _cameraController!.value.isInitialized) {
+      try {
+        final xFile = await _cameraController!.takePicture();
+        attachedImage = xFile.path;
+      } catch (e) {
+        print("Live Vision Capture Error: $e");
+      }
+    }
 
     _chatHistory.add(VoiceChatMessage(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
@@ -134,7 +191,7 @@ class VoiceCubit extends Cubit<VoiceState> {
       timestamp: DateTime.now(),
       imagePath: attachedImage,
     ));
-    emit(VoiceProcessing(command, _chatHistory, pendingImagePath: _pendingImagePath));
+    emit(VoiceProcessing(command, _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
 
     try {
       await _generateStreamingResponse(command, imagePath: attachedImage);
@@ -144,12 +201,11 @@ class VoiceCubit extends Cubit<VoiceState> {
   }
 
   Future<void> initializeServices({AIModel? specificModel}) async {
-    emit(VoiceInitializing(_chatHistory, message: "Checking permissions...", pendingImagePath: _pendingImagePath));
+    emit(VoiceInitializing(_chatHistory, message: "Checking permissions...", pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
 
     try {
-      await _requestStoragePermission();
+      await _requestPermissions();
 
-      // Load Settings
       _wakeWords = await _modelManagementService.getWakeWords();
       _selectedWakeWord = await _modelManagementService.getSelectedWakeWord();
       _availableVoices = await _ttsService.getAvailableVoices();
@@ -176,7 +232,7 @@ class VoiceCubit extends Cubit<VoiceState> {
           ? "Loading ${modelToLoad.name}..."
           : "Loading default model...";
 
-      emit(VoiceInitializing(_chatHistory, message: initMessage, pendingImagePath: _pendingImagePath));
+      emit(VoiceInitializing(_chatHistory, message: initMessage, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
 
       bool forceCpu = modelToLoad?.isGpuSupported == false;
 
@@ -186,7 +242,7 @@ class VoiceCubit extends Cubit<VoiceState> {
       );
 
       if (!gemmaInitialized) {
-        emit(VoiceError('Failed to load model.', _chatHistory, pendingImagePath: _pendingImagePath));
+        emit(VoiceError('Failed to load model.', _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
         return;
       }
 
@@ -200,20 +256,19 @@ class VoiceCubit extends Cubit<VoiceState> {
 
       bool speechAvailable = await _speechService.init();
       if (speechAvailable) {
-        emit(SpeechReady(_chatHistory, pendingImagePath: _pendingImagePath));
+        emit(SpeechReady(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
         if (!_isManualStop) {
           await startListening();
         }
       } else {
-        emit(SpeechUnavailable(_chatHistory, pendingImagePath: _pendingImagePath));
+        emit(SpeechUnavailable(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
       }
     } catch (e) {
-      emit(VoiceError('Initialization failed: $e', _chatHistory, pendingImagePath: _pendingImagePath));
+      emit(VoiceError('Initialization failed: $e', _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
     }
   }
 
   // --- Settings Management Methods ---
-
   Future<void> addWakeWord(String word) async {
     if (word.trim().isEmpty) return;
     final lower = word.trim().toLowerCase();
@@ -231,7 +286,7 @@ class VoiceCubit extends Cubit<VoiceState> {
       if (_selectedWakeWord == word) {
         await setSelectedWakeWord(_wakeWords.isNotEmpty ? _wakeWords.first : 'jack');
       } else {
-        emit(VoiceSettingsUpdated(_chatHistory, pendingImagePath: _pendingImagePath));
+        emit(VoiceSettingsUpdated(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
       }
     }
   }
@@ -240,7 +295,7 @@ class VoiceCubit extends Cubit<VoiceState> {
     if (_wakeWords.contains(word)) {
       _selectedWakeWord = word;
       await _modelManagementService.saveSelectedWakeWord(word);
-      emit(VoiceSettingsUpdated(_chatHistory, pendingImagePath: _pendingImagePath));
+      emit(VoiceSettingsUpdated(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
     }
   }
 
@@ -248,10 +303,8 @@ class VoiceCubit extends Cubit<VoiceState> {
     _currentVoice = voice;
     await _ttsService.setVoice(voice);
     await _modelManagementService.saveSelectedVoice(voice);
-    emit(VoiceSettingsUpdated(_chatHistory, pendingImagePath: _pendingImagePath));
+    emit(VoiceSettingsUpdated(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
   }
-
-  // --- End Settings Management ---
 
   Future<void> switchModel(AIModel model) async {
     _isManualStop = true;
@@ -282,12 +335,13 @@ class VoiceCubit extends Cubit<VoiceState> {
       }
       return null;
     } catch (e) {
-      emit(VoiceError("Failed to pick file: $e", _chatHistory, pendingImagePath: _pendingImagePath));
+      emit(VoiceError("Failed to pick file: $e", _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
       return null;
     }
   }
 
-  Future<void> _requestStoragePermission() async {
+  Future<void> _requestPermissions() async {
+    await Permission.camera.request();
     if (await Permission.manageExternalStorage.request().isGranted) return;
     if (await Permission.storage.request().isGranted) return;
   }
@@ -296,12 +350,12 @@ class VoiceCubit extends Cubit<VoiceState> {
     _isManualStop = false;
     if (_ttsService.isSpeaking) await _ttsService.stop();
     _lastRecognizedText = '';
-    emit(VoiceListening("", _chatHistory, pendingImagePath: _pendingImagePath));
+    emit(VoiceListening("", _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
     _resetStateTimer?.cancel();
     await _speechService.startListening(
       onResult: (words) {
         _lastRecognizedText = words;
-        emit(VoiceListening(words, _chatHistory, pendingImagePath: _pendingImagePath));
+        emit(VoiceListening(words, _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
       },
       onSessionComplete: () {
         if (!_isManualStop) _handleListeningComplete();
@@ -314,13 +368,13 @@ class VoiceCubit extends Cubit<VoiceState> {
     _resetStateTimer?.cancel();
     await _speechService.stopListening();
     await _ttsService.stop();
-    emit(VoiceIdle(_chatHistory, pendingImagePath: _pendingImagePath));
+    emit(VoiceIdle(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
   }
 
   Future<void> stopSpeaking() async {
     _isManualStop = true;
     await _ttsService.stop();
-    emit(VoiceIdle(_chatHistory, pendingImagePath: _pendingImagePath));
+    emit(VoiceIdle(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
   }
 
   Future<void> restartListening() async {
@@ -329,7 +383,7 @@ class VoiceCubit extends Cubit<VoiceState> {
 
   void clearChatHistory() {
     _chatHistory.clear();
-    emit(VoiceIdle(_chatHistory, pendingImagePath: _pendingImagePath));
+    emit(VoiceIdle(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
   }
 
   void _handleListeningComplete() async {
@@ -349,8 +403,6 @@ class VoiceCubit extends Cubit<VoiceState> {
 
     if (command.isEmpty) {
       String displayWake = _selectedWakeWord[0].toUpperCase() + _selectedWakeWord.substring(1);
-
-      // Do NOT consume the pending image if they just said the wake word
       _chatHistory.add(VoiceChatMessage(
           id: DateTime.now().toString(),
           text: displayWake,
@@ -358,25 +410,34 @@ class VoiceCubit extends Cubit<VoiceState> {
           timestamp: DateTime.now()
       ));
 
-      emit(VoiceResponseReady(displayWake, "Yes?", _chatHistory, pendingImagePath: _pendingImagePath));
+      emit(VoiceResponseReady(displayWake, "Yes?", _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
       await _ttsService.speak("Yes?");
       await _ttsService.waitForCompletion();
       if (!_isManualStop) await startListening();
       return;
     }
 
-    // Capture the pending image to send it
-    final attachedImage = _pendingImagePath;
+    // --- DYNAMIC FRAME CAPTURE TRIGGER ---
+    String? attachedImage = _pendingImagePath;
     _pendingImagePath = null;
+
+    if (_isLiveVisionEnabled && attachedImage == null && _cameraController != null && _cameraController!.value.isInitialized) {
+      try {
+        final xFile = await _cameraController!.takePicture();
+        attachedImage = xFile.path;
+      } catch (e) {
+        print("Live Vision Capture Error: $e");
+      }
+    }
 
     _chatHistory.add(VoiceChatMessage(
       id: DateTime.now().toString(),
       text: _lastRecognizedText,
       isUser: true,
       timestamp: DateTime.now(),
-      imagePath: attachedImage, // Bind image
+      imagePath: attachedImage,
     ));
-    emit(VoiceProcessing(_lastRecognizedText, _chatHistory, pendingImagePath: _pendingImagePath));
+    emit(VoiceProcessing(_lastRecognizedText, _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
 
     try { await _generateStreamingResponse(command, imagePath: attachedImage); }
     catch (e) { _handleErrorAndRestart(); }
@@ -384,7 +445,7 @@ class VoiceCubit extends Cubit<VoiceState> {
 
   void _restartLoopImmediately() {
     if (state is! VoiceSettingsUpdated && state is! VoiceImageAttached) {
-      emit(VoiceIdle(_chatHistory, pendingImagePath: _pendingImagePath));
+      emit(VoiceIdle(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
     }
     _resetStateTimer?.cancel();
     _resetStateTimer = Timer(resetTimeout, () async { if (!isClosed && !_isManualStop) await startListening(); });
@@ -394,13 +455,12 @@ class VoiceCubit extends Cubit<VoiceState> {
     _speechService.pauseListening();
     String error = "I'm sorry, I encountered an error.";
     _chatHistory.add(VoiceChatMessage(id: DateTime.now().toString(), text: error, isUser: false, timestamp: DateTime.now()));
-    emit(VoiceResponseReady("", error, _chatHistory, pendingImagePath: _pendingImagePath));
+    emit(VoiceResponseReady("", error, _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
     await _ttsService.speak(error);
     await _ttsService.waitForCompletion();
     if (!_isManualStop) await startListening();
   }
 
-  // UPDATED: Now receives the imagePath
   Future<void> _generateStreamingResponse(String inputText, {String? imagePath}) async {
     String fullRawResponse = '';
     String sentenceBuffer = '';
@@ -418,7 +478,6 @@ class VoiceCubit extends Cubit<VoiceState> {
     Duration? firstTokenLatency;
 
     try {
-      // Pass imagePath through to the domain layer
       await for (String token in _generateResponseUseCase.callStreaming(inputText, imagePath: imagePath)) {
         if (_isManualStop) break;
 
@@ -444,7 +503,7 @@ class VoiceCubit extends Cubit<VoiceState> {
           timestamp: DateTime.now(),
           latency: firstTokenLatency,
         );
-        emit(VoiceStreamingResponse(inputText, fullRawResponse, false, [..._chatHistory, msg], pendingImagePath: _pendingImagePath));
+        emit(VoiceStreamingResponse(inputText, fullRawResponse, false, [..._chatHistory, msg], pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
       }
 
       if (_isManualStop) return;
@@ -467,8 +526,8 @@ class VoiceCubit extends Cubit<VoiceState> {
       trace.putAttribute('status', 'success');
       await trace.stop();
 
-      emit(VoiceResponseReady(inputText, formatted, _chatHistory, pendingImagePath: _pendingImagePath));
-      emit(VoiceSpeaking(formatted, _chatHistory, pendingImagePath: _pendingImagePath));
+      emit(VoiceResponseReady(inputText, formatted, _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
+      emit(VoiceSpeaking(formatted, _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
 
       await _ttsService.waitForCompletion();
 
@@ -481,6 +540,7 @@ class VoiceCubit extends Cubit<VoiceState> {
   Future<void> close() async {
     _isManualStop = true;
     _resetStateTimer?.cancel();
+    await _cameraController?.dispose();
     await _speechService.stopListening();
     await _ttsService.stop();
     await _generateResponseUseCase.repository.disposeModel();

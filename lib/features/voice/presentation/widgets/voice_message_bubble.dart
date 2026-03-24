@@ -30,10 +30,10 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble> {
         crossAxisAlignment: CrossAxisAlignment.end, // Align latency to bottom
         children: [
           if (!message.isUser) ...[
-            CircleAvatar(
+            const CircleAvatar(
               radius: 16,
               backgroundColor: Colors.blue,
-              child: const Icon(Icons.smart_toy, color: Colors.white, size: 18),
+              child: Icon(Icons.smart_toy, color: Colors.white, size: 18),
             ),
             const SizedBox(width: 8),
           ],
@@ -48,8 +48,11 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble> {
                     margin: const EdgeInsets.only(bottom: 6),
                     constraints: const BoxConstraints(maxHeight: 200, maxWidth: 220),
                     decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.grey.shade300),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.grey.shade300),
+                        boxShadow: const [
+                          BoxShadow(color: Colors.black12, blurRadius: 4, spreadRadius: 1)
+                        ]
                     ),
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(12),
@@ -72,10 +75,15 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble> {
                     Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: message.isUser
-                            ? Colors.blue.withAlpha(200)
-                            : Colors.grey.withAlpha(100),
-                        borderRadius: BorderRadius.circular(12),
+                        // Using fully opaque colors ensures high contrast and readability
+                        // even when the busy camera feed is playing in the background.
+                          color: message.isUser
+                              ? Colors.blue.shade600
+                              : Colors.grey.shade200,
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: const [
+                            BoxShadow(color: Colors.black12, blurRadius: 4, spreadRadius: 1)
+                          ]
                       ),
                       child: SelectableText(
                         displayedText,
@@ -103,7 +111,7 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble> {
                             child: Icon(
                               _showRaw ? Icons.visibility_off : Icons.visibility,
                               size: 14,
-                              color: Colors.blue,
+                              color: Colors.blue.shade700,
                             ),
                           ),
                         ),
@@ -118,7 +126,9 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble> {
                       "Latency: ${message.latency!.inMilliseconds}ms",
                       style: TextStyle(
                         fontSize: 10,
-                        color: Colors.grey.shade600,
+                        // Ensured text is somewhat readable on dark or light backgrounds
+                        color: Colors.grey.shade400,
+                        fontWeight: FontWeight.w600,
                         fontStyle: FontStyle.italic,
                       ),
                     ),
@@ -128,10 +138,10 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble> {
           ),
           if (message.isUser) ...[
             const SizedBox(width: 8),
-            CircleAvatar(
+            const CircleAvatar(
               radius: 16,
               backgroundColor: Colors.green,
-              child: const Icon(Icons.person, color: Colors.white, size: 18),
+              child: Icon(Icons.person, color: Colors.white, size: 18),
             ),
           ],
         ],
