@@ -16,6 +16,8 @@ import '../widgets/voice_message_bubble.dart';
 import '../../../../shared/widgets/model_selector_dropdown.dart';
 import '../../../../core/models/ai_model.dart';
 import '../../../../core/services/model_management_service.dart';
+import 'vqa_test_runner.dart';
+
 
 class VoiceChatScreen extends StatefulWidget {
   const VoiceChatScreen({Key? key}) : super(key: key);
@@ -28,10 +30,17 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
   final ModelManagementService _modelService = ModelManagementService();
   final ScrollController _scrollController = ScrollController();
   final TextEditingController _debugInputController = TextEditingController();
+
+  // Create a single shared instance of the repository for the screen
+  final GemmaRepositoryImpl _gemmaRepository = GemmaRepositoryImpl();
+
   AIModel? _selectedModel;
 
   // NEW: State to track full screen vision mode
   bool _isFullScreenVision = false;
+
+  // NEW: State to track if tests are running
+  bool _isTesting = false;
 
   @override
   void initState() {
@@ -49,6 +58,43 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
   Future<void> _loadSelectedModel() async {
     final model = await _modelService.getSelectedModel();
     setState(() => _selectedModel = model);
+  }
+
+  // NEW: Hidden function to trigger automated testing
+  void _runAutomatedTests(BuildContext context) async {
+    if (_isTesting) return;
+
+    final cubit = context.read<VoiceCubit>();
+    if (cubit.state is VoiceInitializing) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Wait for model to initialize first!')));
+      return;
+    }
+
+    setState(() => _isTesting = true);
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('🚀 Starting 200 Automated VQA Tests... check logs!')));
+
+    try {
+      // Create test runner with the already-initialized shared Gemma instance
+      final testRunner = VqaTestRunner(_gemmaRepository);
+      final csvPath = await testRunner.runAutomatedTests('assets/vqa_test/dataset.json');
+
+      if (mounted) {
+        showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text("Tests Complete! ✅"),
+              content: Text("Results saved to:\n\n$csvPath\n\nUse Android Studio Device Explorer to pull this CSV file."),
+              actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("OK"))],
+            )
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('❌ Tests failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _isTesting = false);
+    }
   }
 
   void _showSettingsDialog(BuildContext parentContext) {
@@ -242,13 +288,27 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
       create: (_) => VoiceCubit(
           SpeechToTextService(),
           TextToSpeechService(),
-          GenerateResponseUseCase(GemmaRepositoryImpl())
+          // Pass the shared instance to the Cubit so it initializes IT
+          GenerateResponseUseCase(_gemmaRepository)
       )..initializeServices(),
       child: Builder(
           builder: (context) {
             return Scaffold(
               appBar: AppBar(
-                title: const Text("Voice Chat"),
+                // 🔴 FIX: Wrap title in GestureDetector for hidden debug menu
+                title: GestureDetector(
+                  onLongPress: () => _runAutomatedTests(context),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text("Voice Chat"),
+                      if (_isTesting) ...[
+                        const SizedBox(width: 8),
+                        const SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
+                      ]
+                    ],
+                  ),
+                ),
                 leading: IconButton(
                   icon: const Icon(Icons.arrow_back),
                   onPressed: () {
