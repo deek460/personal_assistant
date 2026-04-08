@@ -11,6 +11,7 @@ import '../../../../core/services/speech_to_text_service.dart';
 import '../../../../core/services/text_to_speech_service.dart';
 import '../../../../features/gemma_integration/data/repositories/gemma_repository_impl.dart';  // ADD THIS
 import '../../../../features/gemma_integration/domain/usecases/generate_response_usecase.dart';
+import '../../../../core/services/wake_word_service.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -22,7 +23,8 @@ class HomeScreen extends StatelessWidget {
       create: (_) => VoiceCubit(
         SpeechToTextService(),
         TextToSpeechService(),
-        GenerateResponseUseCase(GemmaRepositoryImpl()), // ADD THIS THIRD PARAMETER
+        WakeWordService(), // FIX: ADD WAKE WORD SERVICE HERE
+        GenerateResponseUseCase(GemmaRepositoryImpl()),
       ),
       child: const _HomeContent(),
     );

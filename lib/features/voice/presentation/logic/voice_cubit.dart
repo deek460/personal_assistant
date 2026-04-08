@@ -4,9 +4,11 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:camera/camera.dart'; // NEW IMPORT
+import 'package:camera/camera.dart';
 import '../../../../core/services/speech_to_text_service.dart';
 import '../../../../core/services/text_to_speech_service.dart';
+// NEW IMPORT:
+import '../../../../core/services/wake_word_service.dart';
 import '../../data/models/voice_chat_message.dart';
 import '../../../gemma_integration/data/repositories/gemma_repository_impl.dart';
 import '../../../gemma_integration/domain/usecases/generate_response_usecase.dart';
@@ -15,7 +17,7 @@ import '../../../../core/models/ai_model.dart';
 import '../../../../core/services/model_management_service.dart';
 import 'package:firebase_performance/firebase_performance.dart';
 
-// --- STATES UPDATED TO HOLD CAMERA & LIVE VISION STATE ---
+// --- STATES ---
 abstract class VoiceState {
   final List<VoiceChatMessage> chatHistory;
   final String? pendingImagePath;
@@ -30,6 +32,11 @@ class VoiceInitial extends VoiceState { VoiceInitial() : super([]); }
 class VoiceInitializing extends VoiceState {
   final String message;
   VoiceInitializing(List<VoiceChatMessage> chatHistory, {this.message = "Initializing...", String? pendingImagePath, bool isLiveVisionEnabled = false, CameraController? cameraController})
+      : super(chatHistory, pendingImagePath: pendingImagePath, isLiveVisionEnabled: isLiveVisionEnabled, cameraController: cameraController);
+}
+// NEW STATE: Sentinel mode active
+class VoiceWaitingForWakeWord extends VoiceState {
+  VoiceWaitingForWakeWord(List<VoiceChatMessage> chatHistory, {String? pendingImagePath, bool isLiveVisionEnabled = false, CameraController? cameraController})
       : super(chatHistory, pendingImagePath: pendingImagePath, isLiveVisionEnabled: isLiveVisionEnabled, cameraController: cameraController);
 }
 class SpeechReady extends VoiceState {
@@ -89,13 +96,12 @@ class VoiceImageAttached extends VoiceState {
 class VoiceCubit extends Cubit<VoiceState> {
   final SpeechToTextService _speechService;
   final TextToSpeechService _ttsService;
+  final WakeWordService _wakeWordService; // NEW INJECTION
   final GenerateResponseUseCase _generateResponseUseCase;
   final ModelManagementService _modelManagementService = ModelManagementService();
 
   String _lastRecognizedText = '';
   List<VoiceChatMessage> _chatHistory = [];
-  Timer? _resetStateTimer;
-  static const Duration resetTimeout = Duration(milliseconds: 200);
   bool _isManualStop = false;
 
   // -- Image & Camera State --
@@ -106,13 +112,14 @@ class VoiceCubit extends Cubit<VoiceState> {
 
   // -- Settings State --
   List<String> _wakeWords = [];
-  String _selectedWakeWord = 'jack'; // Default
+  String _selectedWakeWord = 'jack';
   List<dynamic> _availableVoices = [];
   Map<String, String>? _currentVoice;
 
   VoiceCubit(
       this._speechService,
       this._ttsService,
+      this._wakeWordService,
       this._generateResponseUseCase,
       ) : super(VoiceInitial());
 
@@ -135,7 +142,6 @@ class VoiceCubit extends Cubit<VoiceState> {
       try {
         final cameras = await availableCameras();
         if (cameras.isNotEmpty) {
-          // Initialize camera without audio to save resources
           _cameraController = CameraController(cameras.first, ResolutionPreset.medium, enableAudio: false);
           await _cameraController!.initialize();
           _isLiveVisionEnabled = true;
@@ -156,7 +162,8 @@ class VoiceCubit extends Cubit<VoiceState> {
         emit(VoiceImageAttached(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
 
         await _ttsService.speak("Image attached. Ask me about it.");
-        if (!_isManualStop) await startListening();
+        await _ttsService.waitForCompletion();
+        if (!_isManualStop) await startActiveDictation(); // Jump straight to asking
       }
     } catch (e) {
       emit(VoiceError("Failed to attach image: $e", _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
@@ -169,19 +176,17 @@ class VoiceCubit extends Cubit<VoiceState> {
   }
 
   Future<void> processTextCommand(String command) async {
-    print("VoiceCubit: Processing injected command: $command");
+    await _wakeWordService.stopListening();
+    await _speechService.stopListening();
 
     String? attachedImage = _pendingImagePath;
     _pendingImagePath = null;
 
-    // Trigger instant capture if Live Vision is ON and no static image is pending
     if (_isLiveVisionEnabled && attachedImage == null && _cameraController != null && _cameraController!.value.isInitialized) {
       try {
         final xFile = await _cameraController!.takePicture();
         attachedImage = xFile.path;
-      } catch (e) {
-        print("Live Vision Capture Error: $e");
-      }
+      } catch (e) {}
     }
 
     _chatHistory.add(VoiceChatMessage(
@@ -218,24 +223,10 @@ class VoiceCubit extends Cubit<VoiceState> {
       AIModel? modelToLoad = specificModel;
       modelToLoad ??= await _modelManagementService.getSelectedModel();
 
-      final prefs = await SharedPreferences.getInstance();
-      final bool hasCrashed = prefs.getBool('gpu_init_crash_marker') ?? false;
-
-      if (hasCrashed && modelToLoad != null) {
-        print("🚨 Detected previous native crash. Marking model '${modelToLoad.name}' as CPU Only.");
-        modelToLoad = modelToLoad.copyWith(isGpuSupported: false);
-        await _modelManagementService.addModel(modelToLoad);
-        await prefs.setBool('gpu_init_crash_marker', false);
-      }
-
-      String initMessage = modelToLoad != null
-          ? "Loading ${modelToLoad.name}..."
-          : "Loading default model...";
-
+      String initMessage = modelToLoad != null ? "Loading ${modelToLoad.name}..." : "Loading default model...";
       emit(VoiceInitializing(_chatHistory, message: initMessage, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
 
       bool forceCpu = modelToLoad?.isGpuSupported == false;
-
       bool gemmaInitialized = await (_generateResponseUseCase.repository as GemmaRepositoryImpl).initializeModel(
           modelPath: modelToLoad?.address,
           forceCpu: forceCpu
@@ -246,19 +237,14 @@ class VoiceCubit extends Cubit<VoiceState> {
         return;
       }
 
-      final repoImpl = _generateResponseUseCase.repository as GemmaRepositoryImpl;
-      bool actuallyUsedGpu = repoImpl.isUsingGpu;
+      // 🔴 INITIALIZE BOTH SPEECH ENGINES
+      bool sttAvailable = await _speechService.init();
+      bool voskAvailable = await _wakeWordService.init();
 
-      if (modelToLoad != null && modelToLoad.isGpuSupported != actuallyUsedGpu) {
-        final updatedModel = modelToLoad.copyWith(isGpuSupported: actuallyUsedGpu);
-        await _modelManagementService.addModel(updatedModel);
-      }
-
-      bool speechAvailable = await _speechService.init();
-      if (speechAvailable) {
+      if (sttAvailable && voskAvailable) {
         emit(SpeechReady(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
         if (!_isManualStop) {
-          await startListening();
+          await startSentinelMode(); // Start Vosk Always-On
         }
       } else {
         emit(SpeechUnavailable(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
@@ -295,6 +281,12 @@ class VoiceCubit extends Cubit<VoiceState> {
     if (_wakeWords.contains(word)) {
       _selectedWakeWord = word;
       await _modelManagementService.saveSelectedWakeWord(word);
+
+      // Restart sentinel if it's currently running so it uses the new word
+      if (state is VoiceWaitingForWakeWord) {
+        await startSentinelMode();
+      }
+
       emit(VoiceSettingsUpdated(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
     }
   }
@@ -308,7 +300,7 @@ class VoiceCubit extends Cubit<VoiceState> {
 
   Future<void> switchModel(AIModel model) async {
     _isManualStop = true;
-    _resetStateTimer?.cancel();
+    await _wakeWordService.stopListening();
     await _speechService.stopListening();
     await _ttsService.stop();
     await Future.delayed(const Duration(milliseconds: 500));
@@ -346,26 +338,71 @@ class VoiceCubit extends Cubit<VoiceState> {
     if (await Permission.storage.request().isGranted) return;
   }
 
-  Future<void> startListening() async {
+  // --- HYBRID MICROPHONE ORCHESTRATION ---
+
+  /// 1. Turns ON Vosk, turns OFF Native STT.
+  Future<void> startSentinelMode() async {
     _isManualStop = false;
+    await _speechService.stopListening(); // Ensure STT is dead
+
+    emit(VoiceWaitingForWakeWord(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
+
+    await _wakeWordService.startListening(
+        wakeWord: _selectedWakeWord,
+        onDetect: _onWakeWordDetected
+    );
+  }
+
+  /// 2. Triggered instantly when Vosk mathematically matches the wake word
+  void _onWakeWordDetected() async {
+    if (_isManualStop) return;
+
+    // A. Kill Vosk to free the mic lock
+    await _wakeWordService.stopListening();
+
+    // B. Acknowledge the user
+    String displayWake = _selectedWakeWord[0].toUpperCase() + _selectedWakeWord.substring(1);
+    _chatHistory.add(VoiceChatMessage(
+        id: DateTime.now().toString(),
+        text: displayWake,
+        isUser: true,
+        timestamp: DateTime.now()
+    ));
+
+    emit(VoiceResponseReady(displayWake, "Yes?", _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
+    await _ttsService.speak("Yes?");
+    await _ttsService.waitForCompletion();
+
+    // C. Boot up Native STT for the complex command
+    if (!_isManualStop) {
+      await startActiveDictation();
+    }
+  }
+
+  /// 3. Turns ON Native STT.
+  Future<void> startActiveDictation() async {
+    _isManualStop = false;
+    await _wakeWordService.stopListening(); // Safety check
     if (_ttsService.isSpeaking) await _ttsService.stop();
+
     _lastRecognizedText = '';
     emit(VoiceListening("", _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
-    _resetStateTimer?.cancel();
+
     await _speechService.startListening(
       onResult: (words) {
         _lastRecognizedText = words;
         emit(VoiceListening(words, _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
       },
       onSessionComplete: () {
-        if (!_isManualStop) _handleListeningComplete();
+        if (!_isManualStop) _processDictatedCommand();
       },
     );
   }
 
+  // User manually tapped the Stop button
   Future<void> stopListening() async {
     _isManualStop = true;
-    _resetStateTimer?.cancel();
+    await _wakeWordService.stopListening();
     await _speechService.stopListening();
     await _ttsService.stop();
     emit(VoiceIdle(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
@@ -377,8 +414,9 @@ class VoiceCubit extends Cubit<VoiceState> {
     emit(VoiceIdle(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
   }
 
-  Future<void> restartListening() async {
-    await startListening();
+  // User manually tapped the Mic button
+  Future<void> forceStartDictation() async {
+    await startActiveDictation();
   }
 
   void clearChatHistory() {
@@ -386,34 +424,17 @@ class VoiceCubit extends Cubit<VoiceState> {
     emit(VoiceIdle(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
   }
 
-  void _handleListeningComplete() async {
+  /// 4. Command recorded. Pass to Gemma.
+  void _processDictatedCommand() async {
     if (_isManualStop) return;
 
     _speechService.pauseListening();
 
-    final String originalText = _lastRecognizedText.trim().toLowerCase();
-    bool matchFound = originalText.startsWith(_selectedWakeWord);
-
-    if (!matchFound || originalText.isEmpty) {
-      _restartLoopImmediately();
-      return;
-    }
-
-    String command = originalText.substring(_selectedWakeWord.length).trim().replaceAll(RegExp(r'^[,.?!:\s]+'), '');
+    String command = _lastRecognizedText.trim().replaceAll(RegExp(r'^[,.?!:\s]+'), '');
 
     if (command.isEmpty) {
-      String displayWake = _selectedWakeWord[0].toUpperCase() + _selectedWakeWord.substring(1);
-      _chatHistory.add(VoiceChatMessage(
-          id: DateTime.now().toString(),
-          text: displayWake,
-          isUser: true,
-          timestamp: DateTime.now()
-      ));
-
-      emit(VoiceResponseReady(displayWake, "Yes?", _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
-      await _ttsService.speak("Yes?");
-      await _ttsService.waitForCompletion();
-      if (!_isManualStop) await startListening();
+      // User didn't say anything after "Yes?". Go back to sentinel mode.
+      startSentinelMode();
       return;
     }
 
@@ -432,23 +453,18 @@ class VoiceCubit extends Cubit<VoiceState> {
 
     _chatHistory.add(VoiceChatMessage(
       id: DateTime.now().toString(),
-      text: _lastRecognizedText,
+      text: command,
       isUser: true,
       timestamp: DateTime.now(),
       imagePath: attachedImage,
     ));
-    emit(VoiceProcessing(_lastRecognizedText, _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
+    emit(VoiceProcessing(command, _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
 
-    try { await _generateStreamingResponse(command, imagePath: attachedImage); }
-    catch (e) { _handleErrorAndRestart(); }
-  }
-
-  void _restartLoopImmediately() {
-    if (state is! VoiceSettingsUpdated && state is! VoiceImageAttached) {
-      emit(VoiceIdle(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
+    try {
+      await _generateStreamingResponse(command, imagePath: attachedImage);
+    } catch (e) {
+      _handleErrorAndRestart();
     }
-    _resetStateTimer?.cancel();
-    _resetStateTimer = Timer(resetTimeout, () async { if (!isClosed && !_isManualStop) await startListening(); });
   }
 
   void _handleErrorAndRestart() async {
@@ -458,7 +474,7 @@ class VoiceCubit extends Cubit<VoiceState> {
     emit(VoiceResponseReady("", error, _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
     await _ttsService.speak(error);
     await _ttsService.waitForCompletion();
-    if (!_isManualStop) await startListening();
+    if (!_isManualStop) await startSentinelMode();
   }
 
   Future<void> _generateStreamingResponse(String inputText, {String? imagePath}) async {
@@ -531,16 +547,19 @@ class VoiceCubit extends Cubit<VoiceState> {
 
       await _ttsService.waitForCompletion();
 
-      _speechService.resumeListening();
-      if (!_isManualStop) _restartLoopImmediately();
+      /// 5. Cycle complete. Go back to Sentinel Mode!
+      if (!_isManualStop) {
+        await startSentinelMode();
+      }
+
     } catch (e) { rethrow; }
   }
 
   @override
   Future<void> close() async {
     _isManualStop = true;
-    _resetStateTimer?.cancel();
     await _cameraController?.dispose();
+    await _wakeWordService.stopListening();
     await _speechService.stopListening();
     await _ttsService.stop();
     await _generateResponseUseCase.repository.disposeModel();
