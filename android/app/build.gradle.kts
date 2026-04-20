@@ -24,7 +24,7 @@ android {
 
     defaultConfig {
         applicationId = "com.example.personal_assistant"
-        minSdk = 24
+        minSdk = 29
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
@@ -37,6 +37,26 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("debug")
+        }
+    }
+
+    sourceSets {
+        getByName("main") {
+            jniLibs.srcDirs("src/main/jniLibs")// Ensure JNI libraries are included
+        }
+
+        // 1) Add packaging options
+        packaging {
+            jniLibs {
+                // Avoid duplicate-file errors and ensure libc++_shared.so is included
+                pickFirsts += setOf(
+                    "lib/armeabi-v7a/libc++_shared.so",
+                    "lib/arm64-v8a/libc++_shared.so",
+                    "lib/x86/libc++_shared.so",
+                    "lib/x86_64/libc++_shared.so",
+                    "**/libc++_shared.so" // Ensures it's included in case of conflicts
+                )
+            }
         }
     }
 }

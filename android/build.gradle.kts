@@ -2,6 +2,10 @@ allprojects {
     repositories {
         google()
         mavenCentral()
+        // Required by flutter_wake_word — local AAR bundled with the plugin
+        maven { url = uri("${project.projectDir}/libs") }
+        maven { url = uri(project(":flutter_wake_word").projectDir.toString() + "/libs") }
+        mavenLocal()
     }
 }
 

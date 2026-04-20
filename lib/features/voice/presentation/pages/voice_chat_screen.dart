@@ -8,7 +8,7 @@ import 'dart:io';
 import '../../../../core/navigation/app_router.dart';
 import '../../../../core/services/speech_to_text_service.dart';
 import '../../../../core/services/text_to_speech_service.dart';
-import '../../../../core/services/wake_word_service.dart'; // NEW IMPORT
+import '../../../../core/services/wake_word_service.dart'; // 🔴 RESTORED IMPORT
 import '../logic/voice_cubit.dart';
 import '../../data/models/voice_chat_message.dart';
 import '../../../../features/gemma_integration/data/repositories/gemma_repository_impl.dart';
@@ -17,7 +17,6 @@ import '../widgets/voice_message_bubble.dart';
 import '../../../../shared/widgets/model_selector_dropdown.dart';
 import '../../../../core/models/ai_model.dart';
 import '../../../../core/services/model_management_service.dart';
-import 'vqa_test_runner.dart';
 
 class VoiceChatScreen extends StatefulWidget {
   const VoiceChatScreen({Key? key}) : super(key: key);
@@ -30,12 +29,9 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
   final ModelManagementService _modelService = ModelManagementService();
   final ScrollController _scrollController = ScrollController();
   final TextEditingController _debugInputController = TextEditingController();
-
-  final GemmaRepositoryImpl _gemmaRepository = GemmaRepositoryImpl();
-
   AIModel? _selectedModel;
+
   bool _isFullScreenVision = false;
-  bool _isTesting = false;
 
   @override
   void initState() {
@@ -55,39 +51,7 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
     setState(() => _selectedModel = model);
   }
 
-  void _runAutomatedTests(BuildContext context) async {
-    if (_isTesting) return;
-
-    final cubit = context.read<VoiceCubit>();
-    if (cubit.state is VoiceInitializing) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Wait for model to initialize first!')));
-      return;
-    }
-
-    setState(() => _isTesting = true);
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('🚀 Starting 200 Automated VQA Tests... check logs!')));
-
-    try {
-      final testRunner = VqaTestRunner(_gemmaRepository);
-      final csvPath = await testRunner.runAutomatedTests('assets/vqa_test/dataset.json');
-
-      if (mounted) {
-        showDialog(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              title: const Text("Tests Complete! ✅"),
-              content: Text("Results saved to:\n\n$csvPath\n\nUse Android Studio Device Explorer to pull this CSV file."),
-              actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("OK"))],
-            )
-        );
-      }
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('❌ Tests failed: $e')));
-    } finally {
-      if (mounted) setState(() => _isTesting = false);
-    }
-  }
-
+  // Settings Menu Logic...
   void _showSettingsDialog(BuildContext parentContext) {
     // Keep your exact existing _showSettingsDialog implementation
     final cubit = parentContext.read<VoiceCubit>();
@@ -166,40 +130,47 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // 🔴 INJECTED THE WAKE WORD SERVICE HERE
     return BlocProvider(
       create: (_) => VoiceCubit(
           SpeechToTextService(),
           TextToSpeechService(),
-          WakeWordService(), // INJECT VOSK WAKE WORD SERVICE
-          GenerateResponseUseCase(_gemmaRepository)
+          WakeWordService(),
+          GenerateResponseUseCase(GemmaRepositoryImpl())
       )..initializeServices(),
       child: Builder(
           builder: (context) {
             return Scaffold(
               appBar: AppBar(
-                title: GestureDetector(
-                  onLongPress: () => _runAutomatedTests(context),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Text("Voice Chat"),
-                      if (_isTesting) ...[
-                        const SizedBox(width: 8),
-                        const SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
-                      ]
-                    ],
-                  ),
-                ),
+                title: const Text("Voice Chat"),
                 leading: IconButton(
                   icon: const Icon(Icons.arrow_back),
                   onPressed: () {
-                    if (context.canPop()) context.pop(); else context.go(AppRouter.home);
+                    if (context.canPop()) {
+                      context.pop();
+                    } else {
+                      context.go(AppRouter.home);
+                    }
                   },
                 ),
                 actions: [
-                  IconButton(icon: const Icon(Icons.settings), onPressed: () => _showSettingsDialog(context)),
-                  IconButton(icon: const Icon(Icons.clear_all), onPressed: () => context.read<VoiceCubit>().clearChatHistory()),
-                  IconButton(icon: const Icon(Icons.home), onPressed: () => context.go(AppRouter.home)),
+                  IconButton(
+                    icon: const Icon(Icons.settings),
+                    tooltip: 'Settings',
+                    onPressed: () => _showSettingsDialog(context),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.clear_all),
+                    tooltip: 'Clear History',
+                    onPressed: () {
+                      context.read<VoiceCubit>().clearChatHistory();
+                    },
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.home),
+                    tooltip: 'Home',
+                    onPressed: () => context.go(AppRouter.home),
+                  ),
                 ],
               ),
               body: BlocConsumer<VoiceCubit, VoiceState>(
@@ -413,9 +384,9 @@ class _VoiceChatBody extends StatelessWidget {
     if (state is VoiceInitializing) {
       status = (state as VoiceInitializing).message;
       statusColor = Colors.orange;
-    } else if (state is VoiceWaitingForWakeWord) {
+    } else if (state is VoiceWaitingForWakeWord) { // 🔴 RESTORED SENTINEL STATUS
       status = 'Sentinel Active. Say $displayWord.';
-      statusColor = Colors.purple; // Distinct color for Vosk Sentinel mode
+      statusColor = Colors.purple;
     } else if (state is VoiceListening) {
       status = 'Listening to your command...';
       statusColor = Colors.red;
@@ -539,7 +510,7 @@ class _VoiceChatBody extends StatelessWidget {
 
   Widget _buildMicButton(BuildContext context, VoiceState state) {
     bool isListening = state is VoiceListening; // Native STT is active
-    bool isSentinel = state is VoiceWaitingForWakeWord; // Vosk is active
+    bool isSentinel = state is VoiceWaitingForWakeWord; // 🔴 ONNX is active
     bool isProcessing = state is VoiceProcessing;
     bool canInteract = true;
 
@@ -549,8 +520,8 @@ class _VoiceChatBody extends StatelessWidget {
         if (isListening || isSentinel) {
           cubit.stopListening();
         } else if (state is VoiceIdle || state is SpeechReady) {
-          // If manually tapped, jump straight to dictation (skip wake word)
-          cubit.forceStartDictation();
+          // If manually tapped, jump straight to dictation (skip ONNX sentinel)
+          cubit.startActiveDictation();
         }
       } : null,
       child: Container(
@@ -591,7 +562,8 @@ class _VoiceChatBody extends StatelessWidget {
 
   Widget _buildRestartButton(BuildContext context) {
     return GestureDetector(
-      onTap: () => context.read<VoiceCubit>().startSentinelMode(), // Restarts the loop
+      // 🔴 RESTART INTO SENTINEL MODE
+      onTap: () => context.read<VoiceCubit>().startSentinelMode(),
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.green.withAlpha(isFullScreen ? 150 : 38), border: Border.all(color: Colors.green, width: 2)),

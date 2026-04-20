@@ -85,8 +85,7 @@ class ModelManagementService {
   Future<List<String>> getWakeWords() async {
     final prefs = await SharedPreferences.getInstance();
     final words = prefs.getStringList(_wakeWordsKey);
-    // Return default set if nothing saved
-    return words ?? ['jack', 'computer', 'assistant'];
+    return words ?? ['jarvis', 'lilly', 'maya']; // 🔴 Change 'jack' to 'lilly'
   }
 
   Future<void> saveWakeWords(List<String> words) async {
@@ -97,7 +96,7 @@ class ModelManagementService {
 
   Future<String> getSelectedWakeWord() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_selectedWakeWordKey) ?? 'jack';
+    return prefs.getString(_selectedWakeWordKey) ?? 'jarvis';
   }
 
   Future<void> saveSelectedWakeWord(String word) async {
