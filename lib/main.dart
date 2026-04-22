@@ -18,7 +18,7 @@ void main() async {
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
-  await WakeWordService().initialize();
+  //await WakeWordService().initialize();
 
   runApp(const MyApp());
 }
