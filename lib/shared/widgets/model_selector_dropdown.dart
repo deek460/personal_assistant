@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_bloc/flutter_bloc.dart';
-import '../../features/voice/presentation/logic/voice_cubit.dart';
 import '../../core/models/ai_model.dart';
 import '../../core/services/model_management_service.dart';
+import 'package:file_picker/file_picker.dart';
 
 class ModelSelectorDropdown extends StatefulWidget {
   final Function(AIModel) onModelSelected;
@@ -57,60 +56,69 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
   }
 
   Future<void> _handleAddModel() async {
-    // Capture the cubit to pass to the dialog
-    final cubit = context.read<VoiceCubit>();
     final nameController = TextEditingController();
 
     final name = await showDialog<String>(
       context: context,
-      builder: (dialogContext) => BlocProvider.value(
-        value: cubit, // Provide cubit to fix ProviderNotFoundException
-        child: AlertDialog(
-          title: const Text('Add New Model'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('Enter a name for your model, then select the file.'),
-              const SizedBox(height: 16),
-              TextField(
-                controller: nameController,
-                decoration: const InputDecoration(
-                  labelText: 'Model Name',
-                  border: OutlineInputBorder(),
-                ),
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Add New Model'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Enter a name for your model, then select the file.'),
+            const SizedBox(height: 16),
+            TextField(
+              controller: nameController,
+              decoration: const InputDecoration(
+                labelText: 'Model Name',
+                border: OutlineInputBorder(),
               ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () => Navigator.pop(dialogContext, nameController.text.trim()),
-              child: const Text('Select File'),
             ),
           ],
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(dialogContext, nameController.text.trim()),
+            child: const Text('Select File'),
+          ),
+        ],
       ),
     );
 
     if (name == null) return;
 
-    if (mounted) {
-      final newModel = await cubit.pickAndAddModel(customName: name.isEmpty ? null : name);
+    try {
+      FilePickerResult? result = await FilePicker.platform.pickFiles(type: FileType.any);
+      if (result != null && result.files.single.path != null) {
+        String path = result.files.single.path!;
+        String fileName = result.files.single.name;
+        final newModel = AIModel(
+          id: 'custom-${DateTime.now().millisecondsSinceEpoch}',
+          name: name.isEmpty ? fileName : name,
+          address: path,
+          isDefault: false,
+          isGpuSupported: null,
+        );
 
-      if (newModel != null) {
+        await _modelService.addModel(newModel);
         await _loadModels();
-        widget.onModelSelected(newModel);
-        cubit.switchModel(newModel);
+
+        if (mounted) {
+          widget.onModelSelected(newModel);
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to import model: $e')));
       }
     }
   }
 
   Future<void> _showDeleteConfirmation(AIModel model) async {
-    final cubit = context.read<VoiceCubit>();
-
     if (model.isDefault) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Cannot delete default model')),
@@ -120,22 +128,19 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
 
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) => BlocProvider.value(
-        value: cubit, // Provide cubit to fix ProviderNotFoundException
-        child: AlertDialog(
-          title: const Text('Delete Model'),
-          content: Text('Are you sure you want to delete "${model.name}"?'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('Cancel'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('Delete'),
-            ),
-          ],
-        ),
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete Model'),
+        content: Text('Are you sure you want to delete "${model.name}"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
       ),
     );
 
@@ -147,9 +152,6 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
         final defaultModel = _models.where((m) => m.isDefault).firstOrNull;
         if (defaultModel != null) {
           widget.onModelSelected(defaultModel);
-          if (mounted) {
-            cubit.switchModel(defaultModel);
-          }
         }
       }
     }

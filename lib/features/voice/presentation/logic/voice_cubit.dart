@@ -1,13 +1,12 @@
 import 'dart:async';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:camera/camera.dart';
 import '../../../../core/services/speech_to_text_service.dart';
 import '../../../../core/services/text_to_speech_service.dart';
-import '../../../../core/services/wake_word_service.dart'; // 🔴 RESTORED IMPORT
+import '../../../../core/services/wake_word_service.dart';
 import '../../data/models/voice_chat_message.dart';
 import '../../../gemma_integration/data/repositories/gemma_repository_impl.dart';
 import '../../../gemma_integration/domain/usecases/generate_response_usecase.dart';
@@ -15,6 +14,8 @@ import '../../../../core/services/text_formatter_service.dart';
 import '../../../../core/models/ai_model.dart';
 import '../../../../core/services/model_management_service.dart';
 import 'package:firebase_performance/firebase_performance.dart';
+import '../../../settings/presentation/pages/settings_page.dart';
+import '../../../settings/presentation/logic/settings_cubit.dart';
 
 abstract class VoiceState {
   final List<VoiceChatMessage> chatHistory;
@@ -32,7 +33,6 @@ class VoiceInitializing extends VoiceState {
   VoiceInitializing(List<VoiceChatMessage> chatHistory, {this.message = "Initializing...", String? pendingImagePath, bool isLiveVisionEnabled = false, CameraController? cameraController})
       : super(chatHistory, pendingImagePath: pendingImagePath, isLiveVisionEnabled: isLiveVisionEnabled, cameraController: cameraController);
 }
-// 🔴 RESTORED SENTINEL STATE
 class VoiceWaitingForWakeWord extends VoiceState {
   VoiceWaitingForWakeWord(List<VoiceChatMessage> chatHistory, {String? pendingImagePath, bool isLiveVisionEnabled = false, CameraController? cameraController})
       : super(chatHistory, pendingImagePath: pendingImagePath, isLiveVisionEnabled: isLiveVisionEnabled, cameraController: cameraController);
@@ -82,10 +82,6 @@ class VoiceError extends VoiceState {
   VoiceError(this.errorMessage, List<VoiceChatMessage> chatHistory, {String? pendingImagePath, bool isLiveVisionEnabled = false, CameraController? cameraController})
       : super(chatHistory, pendingImagePath: pendingImagePath, isLiveVisionEnabled: isLiveVisionEnabled, cameraController: cameraController);
 }
-class VoiceSettingsUpdated extends VoiceState {
-  VoiceSettingsUpdated(List<VoiceChatMessage> chatHistory, {String? pendingImagePath, bool isLiveVisionEnabled = false, CameraController? cameraController})
-      : super(chatHistory, pendingImagePath: pendingImagePath, isLiveVisionEnabled: isLiveVisionEnabled, cameraController: cameraController);
-}
 class VoiceImageAttached extends VoiceState {
   VoiceImageAttached(List<VoiceChatMessage> chatHistory, {String? pendingImagePath, bool isLiveVisionEnabled = false, CameraController? cameraController})
       : super(chatHistory, pendingImagePath: pendingImagePath, isLiveVisionEnabled: isLiveVisionEnabled, cameraController: cameraController);
@@ -94,7 +90,7 @@ class VoiceImageAttached extends VoiceState {
 class VoiceCubit extends Cubit<VoiceState> {
   final SpeechToTextService _speechService;
   final TextToSpeechService _ttsService;
-  final WakeWordService _wakeWordService; // 🔴 RESTORED WAKE WORD INSTANCE
+  final WakeWordService _wakeWordService;
   final GenerateResponseUseCase _generateResponseUseCase;
   final ModelManagementService _modelManagementService = ModelManagementService();
 
@@ -109,12 +105,9 @@ class VoiceCubit extends Cubit<VoiceState> {
   CameraController? _cameraController;
   bool _isLiveVisionEnabled = false;
 
-  List<String> _wakeWords = [];
-  String _selectedWakeWord = 'jarvis'; // Default to lilly
-  List<dynamic> _availableVoices = [];
-  Map<String, String>? _currentVoice;
+  // 🔴 FIX 1: Track the currently loaded model ID
+  AIModel? currentLoadedModel;
 
-  // 🔴 RESTORED CONSTRUCTOR SIGNATURE
   VoiceCubit(
       this._speechService,
       this._ttsService,
@@ -122,10 +115,6 @@ class VoiceCubit extends Cubit<VoiceState> {
       this._generateResponseUseCase,
       ) : super(VoiceInitial());
 
-  List<String> get wakeWords => _wakeWords;
-  String get selectedWakeWord => _selectedWakeWord;
-  List<dynamic> get availableVoices => _availableVoices;
-  Map<String, String>? get currentVoice => _currentVoice;
   String? get pendingImagePath => _pendingImagePath;
   bool get isLiveVisionEnabled => _isLiveVisionEnabled;
   CameraController? get cameraController => _cameraController;
@@ -208,17 +197,20 @@ class VoiceCubit extends Cubit<VoiceState> {
     try {
       await _requestPermissions();
 
-      _wakeWords = await _modelManagementService.getWakeWords();
-      _selectedWakeWord = await _modelManagementService.getSelectedWakeWord();
-      _availableVoices = await _ttsService.getAvailableVoices();
+      // ✅ Set license key FIRST before any wake word engine call
+      await _wakeWordService.initialize();
+
+      // Load saved TTS voice if available
       final savedVoice = await _modelManagementService.getSelectedVoice();
       if (savedVoice != null) {
-        _currentVoice = savedVoice;
         await _ttsService.setVoice(savedVoice);
       }
 
       AIModel? modelToLoad = specificModel;
       modelToLoad ??= await _modelManagementService.getSelectedModel();
+
+      // 🔴 FIX 1: Save the reference
+      currentLoadedModel = modelToLoad;
 
       final prefs = await SharedPreferences.getInstance();
       final bool hasCrashed = prefs.getBool('gpu_init_crash_marker') ?? false;
@@ -255,7 +247,7 @@ class VoiceCubit extends Cubit<VoiceState> {
         await _modelManagementService.addModel(updatedModel);
       }
 
-      // 🔴 INIT BOTH ENGINES
+      // INIT STT ENGINE
       bool speechAvailable = await _speechService.init();
 
       if (speechAvailable) {
@@ -271,83 +263,6 @@ class VoiceCubit extends Cubit<VoiceState> {
     }
   }
 
-  Future<void> addWakeWord(String word) async {
-    if (word.trim().isEmpty) return;
-    final lower = word.trim().toLowerCase();
-    if (!_wakeWords.contains(lower)) {
-      _wakeWords.add(lower);
-      await _modelManagementService.saveWakeWords(_wakeWords);
-      await setSelectedWakeWord(lower);
-    }
-  }
-
-  Future<void> removeWakeWord(String word) async {
-    if (_wakeWords.contains(word)) {
-      _wakeWords.remove(word);
-      await _modelManagementService.saveWakeWords(_wakeWords);
-      if (_selectedWakeWord == word) {
-        await setSelectedWakeWord(_wakeWords.isNotEmpty ? _wakeWords.first : 'jarvis');
-      } else {
-        emit(VoiceSettingsUpdated(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
-      }
-    }
-  }
-
-  Future<void> setSelectedWakeWord(String word) async {
-    if (_wakeWords.contains(word)) {
-      _selectedWakeWord = word;
-      await _modelManagementService.saveSelectedWakeWord(word);
-
-      // 🔴 RESTART SENTINEL IMMEDIATELY SO IT LOADS THE NEW .ONNX FILE
-      if (state is VoiceWaitingForWakeWord) {
-        await startSentinelMode();
-      }
-      emit(VoiceSettingsUpdated(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
-    }
-  }
-
-  Future<void> updateVoice(Map<String, String> voice) async {
-    _currentVoice = voice;
-    await _ttsService.setVoice(voice);
-    await _modelManagementService.saveSelectedVoice(voice);
-    emit(VoiceSettingsUpdated(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
-  }
-
-  Future<void> switchModel(AIModel model) async {
-    _isManualStop = true;
-    _resetStateTimer?.cancel();
-    await _wakeWordService.stopListening();
-    await _speechService.stopListening();
-    await _ttsService.stop();
-    await Future.delayed(const Duration(milliseconds: 500));
-    await _modelManagementService.setSelectedModelId(model.id);
-    _isManualStop = false;
-    await initializeServices(specificModel: model);
-  }
-
-  Future<AIModel?> pickAndAddModel({String? customName}) async {
-    try {
-      FilePickerResult? result = await FilePicker.platform.pickFiles(type: FileType.any);
-      if (result != null && result.files.single.path != null) {
-        String path = result.files.single.path!;
-        String fileName = result.files.single.name;
-        final newModel = AIModel(
-          id: 'custom-${DateTime.now().millisecondsSinceEpoch}',
-          name: customName ?? fileName,
-          address: path,
-          isDefault: false,
-          isGpuSupported: null,
-        );
-        await _modelManagementService.addModel(newModel);
-        return newModel;
-      }
-      return null;
-    } catch (e) {
-      emit(VoiceError("Failed to pick file: $e", _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
-      return null;
-    }
-  }
-
   Future<void> _requestPermissions() async {
     await Permission.camera.request();
     await Permission.microphone.request();
@@ -355,55 +270,112 @@ class VoiceCubit extends Cubit<VoiceState> {
     if (await Permission.storage.request().isGranted) return;
   }
 
-  // 🔴 RESTORED HYBRID ARCHITECTURE (ONNX -> STT)
-// AFTER:
-  Future<void> startSentinelMode() async {
-    _isManualStop = false;
-    await _speechService.stopListening(); // Ensure STT is dead
+  // // 🔴 FIX 2: Added a hot-reload function for Settings changes
+  // Future<void> refreshSettings() async {
+  //   final savedVoice = await _modelManagementService.getSelectedVoice();
+  //   if (savedVoice != null) {
+  //     await _ttsService.setVoice(savedVoice);
+  //   }
 
-    emit(VoiceWaitingForWakeWord(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
+    // If the app is currently waiting for a wake word, seamlessly restart the sentinel
+    // to pick up the newly selected wake word instantly.
+  //   if (state is VoiceWaitingForWakeWord) {
+  //     await startSentinelMode();
+  //   }
+  // }
 
-    // First call: register the instance. Subsequent calls: just resume the audio loop.
-    bool success;
-    if (_wakeWordService.isListening == false && !_wakeWordService.isInitialized) {
-      success = await _wakeWordService.startListening(
-          wakeWord: _selectedWakeWord,
-          onDetect: _onWakeWordDetected
-      );
-    } else {
-      await _wakeWordService.resumeListening();
-      success = true;
+  Future<void> refreshSettings() async {
+    // 1. ✅ Kill the active sentinel FIRST before doing anything
+    await _wakeWordService.stopListening();
+
+    // 2. Update the TTS voice
+    final savedVoice = await _modelManagementService.getSelectedVoice();
+    if (savedVoice != null) {
+      await _ttsService.setVoice(savedVoice);
     }
 
-    if (!success) {
-      String errorMsg = "Model file '${_selectedWakeWord.toLowerCase()}.onnx' is missing. Please add the file or select another wake word.";
-      _chatHistory.add(VoiceChatMessage(id: DateTime.now().toString(), text: errorMsg, isUser: false, timestamp: DateTime.now()));
-      emit(VoiceError(errorMsg, _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
-    }
-  }
-
-  void _onWakeWordDetected() async {
-    if (_isManualStop) return;
-    print("Detected Lilly");
-    await _wakeWordService.pauseListening(); // Kill ONNX to free Mic
-    await Future.delayed(const Duration(milliseconds: 300));
-
-    String displayWake = _selectedWakeWord[0].toUpperCase() + _selectedWakeWord.substring(1);
-    _chatHistory.add(VoiceChatMessage(
-        id: DateTime.now().toString(),
-        text: displayWake,
-        isUser: true,
-        timestamp: DateTime.now()
-    ));
-
-    emit(VoiceResponseReady(displayWake, "Yes?", _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
-    await _ttsService.speak("Yes?");
-    await _ttsService.waitForCompletion();
-
-    if (!_isManualStop) {
-      await startActiveDictation();
+    // 3. Restart sentinel cleanly (only if we were in sentinel mode)
+    if (state is VoiceWaitingForWakeWord) {
+      await startSentinelMode();
     }
   }
+
+// 🔴 1. THE HARDWARE DELAY FIX
+// --- REPLACED: Fetch the wake word dynamically! ---
+Future<void> startSentinelMode() async {
+  _isManualStop = false;
+  await _speechService.stopListening();
+
+  // Hardware delay to release mic lock
+  await Future.delayed(const Duration(milliseconds: 600));
+
+  emit(VoiceWaitingForWakeWord(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
+
+  // 🔴 Ask the storage for the active wake word right now
+  final activeWakeWord = await _modelManagementService.getSelectedWakeWord();
+
+  bool success = await _wakeWordService.startListening(
+      wakeWord: activeWakeWord,
+      onDetect: _onWakeWordDetected
+  );
+
+  if (!success) {
+    String errorMsg = "Microphone lock error. Tap the mic icon to retry.";
+    _chatHistory.add(VoiceChatMessage(id: DateTime.now().toString(), text: errorMsg, isUser: false, timestamp: DateTime.now()));
+    emit(VoiceError(errorMsg, _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
+  }
+}
+
+void _onWakeWordDetected() async {
+  if (_isManualStop) return;
+  await _wakeWordService.stopListening();
+
+  await Future.delayed(const Duration(milliseconds: 600));
+
+  // 🔴 Fetch it again to know what to display on the screen
+  final activeWakeWord = await _modelManagementService.getSelectedWakeWord();
+  String displayWake = activeWakeWord[0].toUpperCase() + activeWakeWord.substring(1);
+
+  _chatHistory.add(VoiceChatMessage(
+      id: DateTime.now().toString(),
+      text: displayWake,
+      isUser: true,
+      timestamp: DateTime.now()
+  ));
+
+  emit(VoiceResponseReady(displayWake, "Yes?", _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
+  await _ttsService.speak("Yes?");
+  await _ttsService.waitForCompletion();
+
+  if (!_isManualStop) {
+    await startActiveDictation();
+  }
+}
+
+  // void _onWakeWordDetected() async {
+  //   if (_isManualStop) return;
+  //   print("Wake word detected!");
+  //   await _wakeWordService.stopListening(); // Kill ONNX to free Mic
+  //   await Future.delayed(const Duration(milliseconds: 300));
+  //
+  //   final activeWakeWord = await _modelManagementService.getSelectedWakeWord();
+  //   String displayWake = activeWakeWord[0].toUpperCase() + activeWakeWord.substring(1);
+  //
+  //   _chatHistory.add(VoiceChatMessage(
+  //       id: DateTime.now().toString(),
+  //       text: displayWake,
+  //       isUser: true,
+  //       timestamp: DateTime.now()
+  //   ));
+  //
+  //   emit(VoiceResponseReady(displayWake, "Yes?", _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
+  //   await _ttsService.speak("Yes?");
+  //   await _ttsService.waitForCompletion();
+  //
+  //   if (!_isManualStop) {
+  //     await startActiveDictation();
+  //   }
+  // }
 
   Future<void> startActiveDictation() async {
     _isManualStop = false;
@@ -450,7 +422,6 @@ class VoiceCubit extends Cubit<VoiceState> {
     String command = _lastRecognizedText.trim().replaceAll(RegExp(r'^[,.?!:\s]+'), '');
 
     if (command.isEmpty) {
-      // 🔴 RETURN TO ONNX SENTINEL
       await startSentinelMode();
       return;
     }
@@ -558,7 +529,6 @@ class VoiceCubit extends Cubit<VoiceState> {
 
       await _ttsService.waitForCompletion();
 
-      // 🔴 RETURN TO ONNX SENTINEL
       if (!_isManualStop) await startSentinelMode();
     } catch (e) { rethrow; }
   }

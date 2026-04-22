@@ -5,6 +5,7 @@ import 'app.dart';
 import 'core/utils/service_locator.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
+import 'core/services/wake_word_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -16,6 +17,8 @@ void main() async {
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+
+  await WakeWordService().initialize();
 
   runApp(const MyApp());
 }

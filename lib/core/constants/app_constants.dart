@@ -17,4 +17,7 @@ class AppConstants {
   // Mic Button
   static const double micButtonSize = 80.0;
   static const double micIconSize = 40.0;
+
+  // ✅ Wake Word License Key (get this from davoice.io)
+  static const String wakeWordLicenseKey = 'MTc4Mjg1MzIwMDAwMA==-QYH+tF+Y9UvHypFSSYJNi/RwYHcabxWtw/Ir3Y5CoI8=';
 }

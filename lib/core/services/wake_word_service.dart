@@ -1,133 +1,112 @@
 import 'dart:async';
-import 'package:flutter/services.dart';
 import 'package:flutter_wake_word/flutter_wake_word.dart';
 import 'package:flutter_wake_word/instance_config.dart';
-import 'package:flutter_wake_word/use_model.dart';
+import '../../../../core/constants/app_constants.dart';
 
 class WakeWordService {
   final FlutterWakeWord _wakeWordPlugin = FlutterWakeWord();
-
-  // Access UseModel directly — this is how the official example works
-  UseModel get useModel => _wakeWordPlugin.useModel;
 
   bool _isListening = false;
   bool _isTriggering = false;
   String _activeWakeWord = '';
 
-  // License key — set to empty string if you don't have one
-  static const String _license = 'MTc4Mjg1MzIwMDAwMA==-QYH+tF+Y9UvHypFSSYJNi/RwYHcabxWtw/Ir3Y5CoI8=';
+  // // 🔴 CACHE: Prevents the "Already Initialized" native crash
+  // final Set<String> _registeredWords = {};
+  // 🔴 CACHE: Stores config hash alongside word to detect config changes
+  final Map<String, String> _registeredWords = {}; // instanceId -> configHash
 
-  /// Starts wake word detection for a specific ONNX model file.
-  ///
-  /// [wakeWord] must match the bare filename of an asset placed in
-  /// android/app/src/main/assets/ (e.g. "jarvis" → "jarvis.onnx").
+  String _makeConfigHash(double threshold, int bufferCnt) =>
+      '${threshold}_$bufferCnt';
+
+  // ✅ Call once before startListening is ever used
+  Future<void> initialize() async {
+    try {
+      await _wakeWordPlugin.useModel.setKeywordDetectionLicense(
+        AppConstants.wakeWordLicenseKey,
+      );
+      print("✅ WakeWordService: License key set.");
+    } catch (e) {
+      print("❌ WakeWordService: License init failed: $e");
+    }
+  }
+
   Future<bool> startListening({
     required String wakeWord,
     required Function() onDetect,
   }) async {
     if (_isListening) return true;
-
     _isTriggering = false;
 
     final instanceId = wakeWord.toLowerCase();
     final modelFileName = '$instanceId.onnx';
+    const double threshold = 0.9000;
+    const int bufferCnt = 1;
+    final currentConfigHash = _makeConfigHash(threshold, bufferCnt);
 
     try {
-      print("🎧 WakeWordService: Initializing instance for '$wakeWord'...");
+      final existingConfigHash = _registeredWords[instanceId];
 
-      // Step 1: set license (required even if empty)
-        await useModel.setKeywordDetectionLicense(_license);
+      if (existingConfigHash != null && existingConfigHash != currentConfigHash) {
+        // ✅ Config changed — remove the stale instance so it gets re-added fresh
+        print("🔄 WakeWordService: Config changed for '$wakeWord', reinitializing...");
+        try {
+          await _wakeWordPlugin.useModel.removeInstance(instanceId);
+        } catch (e) {
+          print("⚠️ WakeWordService: Could not remove old instance: $e");
+        }
+        _registeredWords.remove(instanceId);
+      }
 
-      // Step 2: register via MultiInstanceConfig (official pattern)
-      final config = MultiInstanceConfig(
-        id: instanceId,
-        modelNames: [modelFileName],
-        thresholds: [0.90],
-        bufferCnts: [3],
-        msBetweenCallback: [1000],
-        sticky: false,
-      );
-
-      await useModel.addInstanceMulti(
-        config,
-            (Map<String, dynamic> event) {
-          // Prevent double-firing while the app transitions to STT
-          if (_isTriggering) return;
-
-          final detectedPhrase = event['phrase'] as String? ?? instanceId;
-          print("🚨 WakeWordService: WAKE WORD DETECTED! ($detectedPhrase)");
-          _isTriggering = true;
-          onDetect();
-        },
-      );
-
-      // Step 3: start the audio loop
-      await useModel.startListening();
+      if (!_registeredWords.containsKey(instanceId)) {
+        print("🎧 WakeWordService: Initializing NEW instance for '$wakeWord'...");
+        await _wakeWordPlugin.useModel.addInstance(
+          InstanceConfig(
+            id: instanceId,
+            modelName: modelFileName,
+            threshold: threshold,
+            bufferCnt: bufferCnt,
+            sticky: false,
+          ),
+              (Map<String, dynamic> event) {
+            if (_isTriggering) return;
+            final detectedPhrase = event['phrase'] as String? ?? instanceId;
+            if (detectedPhrase.toLowerCase().trim() != _activeWakeWord.toLowerCase().trim()) return;
+            print("🚨 WakeWordService: WAKE WORD DETECTED! ($detectedPhrase)");
+            _isTriggering = true;
+            onDetect();
+          },
+        );
+        _registeredWords[instanceId] = currentConfigHash; // ✅ Store with config hash
+      }
 
       _activeWakeWord = instanceId;
-      _isListening = true;
 
-      print(
-        "✅ WakeWordService: Sentinel active. Listening for '$_activeWakeWord'...",
-      );
+      try {
+        await _wakeWordPlugin.startKeywordDetection(threshold);
+      } catch (e) {
+        print("⚠️ Native Engine Note: Already listening. ($e)");
+      }
+
+      _isListening = true;
+      print("✅ WakeWordService: Sentinel active for '$_activeWakeWord'...");
       return true;
-    } on PlatformException catch (e) {
-      final msg = e.code == 'LICENSE_NOT_VALID'
-          ? 'Wake word license invalid or expired.'
-          : 'Wake word failed to start: ${e.message ?? e.code}';
-      print("❌ WakeWordService: $msg");
-      return false;
     } catch (e) {
       print("❌ WakeWordService: Failed to start listening: $e");
       return false;
     }
   }
 
-  /// Call this after onDetect fires to resume listening (mirrors official example).
-  Future<void> resumeListening() async {
-    if (_isListening) return;
-    try {
-      await useModel.startListening();
-      _isListening = true;
-      _isTriggering = false;
-      print("🎧 WakeWordService: Resumed listening for '$_activeWakeWord'...");
-    } catch (e) {
-      print("❌ WakeWordService: Failed to resume: $e");
-    }
-  }
-
-  /// Stops wake word detection and releases the microphone.
   Future<void> stopListening() async {
     if (!_isListening) return;
-
+    _isListening = false;
+    _isTriggering = false;
     try {
-      await useModel.stopListening();
-
-      _isListening = false;
-      _isTriggering = false;
-      _activeWakeWord = '';
-
+      await _wakeWordPlugin.stopKeywordDetection();
       print("🛑 WakeWordService: Sentinel stopped. Microphone released.");
     } catch (e) {
       print("❌ WakeWordService Error stopping: $e");
     }
   }
 
-  /// Pauses the audio loop without destroying the registered instance.
-  /// Call resumeListening() to restart. Faster than a full stop/start cycle.
-  Future<void> pauseListening() async {
-    if (!_isListening) return;
-    try {
-      await useModel.stopListening();
-      _isListening = false;
-      _isTriggering = false;
-      print("⏸️ WakeWordService: Paused (instance kept alive).");
-    } catch (e) {
-      print("❌ WakeWordService Error pausing: $e");
-    }
-  }
-
-  /// Whether the service is currently listening.
   bool get isListening => _isListening;
-  bool get isInitialized => _activeWakeWord.isNotEmpty;
 }

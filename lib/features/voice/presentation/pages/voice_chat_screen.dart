@@ -17,6 +17,8 @@ import '../widgets/voice_message_bubble.dart';
 import '../../../../shared/widgets/model_selector_dropdown.dart';
 import '../../../../core/models/ai_model.dart';
 import '../../../../core/services/model_management_service.dart';
+import '../../../../features/settings/presentation/pages/settings_page.dart';
+import '../../../../features/settings/presentation/logic/settings_cubit.dart';
 
 class VoiceChatScreen extends StatefulWidget {
   const VoiceChatScreen({Key? key}) : super(key: key);
@@ -30,6 +32,7 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
   final ScrollController _scrollController = ScrollController();
   final TextEditingController _debugInputController = TextEditingController();
   AIModel? _selectedModel;
+  String _activeWakeWord = 'jarvis';
 
   bool _isFullScreenVision = false;
 
@@ -37,6 +40,7 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
   void initState() {
     super.initState();
     _loadSelectedModel();
+    _loadWakeWord();
   }
 
   @override
@@ -51,81 +55,9 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
     setState(() => _selectedModel = model);
   }
 
-  // Settings Menu Logic...
-  void _showSettingsDialog(BuildContext parentContext) {
-    // Keep your exact existing _showSettingsDialog implementation
-    final cubit = parentContext.read<VoiceCubit>();
-    showDialog(
-      context: parentContext,
-      builder: (dialogCtx) {
-        return BlocProvider.value(
-          value: cubit,
-          child: StatefulBuilder(
-            builder: (statefulCtx, setDialogState) {
-              final wakeWords = cubit.wakeWords;
-              final selectedWakeWord = cubit.selectedWakeWord;
-              final voices = cubit.availableVoices;
-              final currentVoice = cubit.currentVoice;
-
-              Map<Object?, Object?>? selectedVoiceValue;
-              if (currentVoice != null) {
-                try {
-                  selectedVoiceValue = voices.firstWhere(
-                          (v) => (v as Map)['name'] == currentVoice['name'],
-                      orElse: () => null
-                  ) as Map<Object?, Object?>?;
-                } catch (e) { /* ignore */ }
-              }
-
-              final TextEditingController wakeWordController = TextEditingController();
-
-              return AlertDialog(
-                title: const Text("Voice Settings"),
-                content: SizedBox(
-                  width: double.maxFinite,
-                  child: SingleChildScrollView(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text("Active Wake Word", style: TextStyle(fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 8),
-                        DropdownButton<String>(
-                          isExpanded: true,
-                          value: wakeWords.contains(selectedWakeWord) ? selectedWakeWord : null,
-                          hint: const Text("Select Wake Word"),
-                          items: wakeWords.map((word) {
-                            return DropdownMenuItem<String>(
-                              value: word,
-                              child: Text(
-                                word[0].toUpperCase() + word.substring(1),
-                              ),
-                            );
-                          }).toList(),
-                          onChanged: (newWord) async {
-                            if (newWord != null) {
-                              await cubit.setSelectedWakeWord(newWord);
-                              setDialogState(() {});
-                            }
-                          },
-                        ),
-                        // ... Rest of your settings dialog
-                      ],
-                    ),
-                  ),
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.of(statefulCtx).pop(),
-                    child: const Text("Close"),
-                  ),
-                ],
-              );
-            },
-          ),
-        );
-      },
-    );
+  Future<void> _loadWakeWord() async {
+    final word = await _modelService.getSelectedWakeWord();
+    if (mounted) setState(() => _activeWakeWord = word);
   }
 
   @override
@@ -157,7 +89,29 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                   IconButton(
                     icon: const Icon(Icons.settings),
                     tooltip: 'Settings',
-                    onPressed: () => _showSettingsDialog(context),
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => BlocProvider(
+                            create: (ctx) => SettingsCubit(
+                              ModelManagementService(),
+                              TextToSpeechService(),
+                            )..loadSettings(),
+                            child: SettingsScreen(
+                              onSettingsChanged: () {
+                                // ✅ VoiceCubit is in scope here at the call site
+                                context.read<VoiceCubit>().refreshSettings();
+                              },
+                            ),
+                          ),
+                        ),
+                      ).then((_) {
+                        // Re-initialize VoiceCubit when returning to apply changes
+                        _loadWakeWord();
+                        context.read<VoiceCubit>().refreshSettings();
+                      });
+                    },
                   ),
                   IconButton(
                     icon: const Icon(Icons.clear_all),
@@ -208,9 +162,11 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                                     width: double.infinity,
                                     child: ModelSelectorDropdown(
                                       selectedModel: _selectedModel,
-                                      onModelSelected: (model) {
+                                      onModelSelected: (model) async {
                                         setState(() => _selectedModel = model);
-                                        context.read<VoiceCubit>().switchModel(model);
+                                        final cubit = context.read<VoiceCubit>();
+                                        await cubit.stopListening();
+                                        await cubit.initializeServices(specificModel: model);
                                       },
                                     ),
                                   ),
@@ -218,7 +174,7 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                                 Expanded(
                                   child: Stack(
                                     children: [
-                                      _VoiceChatBody(scrollController: _scrollController, isFullScreen: _isFullScreenVision),
+                                      _VoiceChatBody(scrollController: _scrollController, isFullScreen: _isFullScreenVision, activeWakeWord: _activeWakeWord,),
                                       if (isCameraReady && !_isFullScreenVision)
                                         Positioned(
                                           top: 16, right: 16, width: 100, height: 140,
@@ -341,8 +297,9 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
 class _VoiceChatBody extends StatelessWidget {
   final ScrollController scrollController;
   final bool isFullScreen;
+  final String activeWakeWord;
 
-  const _VoiceChatBody({required this.scrollController, required this.isFullScreen});
+  const _VoiceChatBody({required this.scrollController, required this.isFullScreen, required this.activeWakeWord});
 
   void _triggerScroll() {
     Future.delayed(const Duration(milliseconds: 100), () {
@@ -363,7 +320,7 @@ class _VoiceChatBody extends StatelessWidget {
         final cubit = context.read<VoiceCubit>();
         return Column(
           children: [
-            _buildStatusDisplay(context, state, cubit.selectedWakeWord),
+            _buildStatusDisplay(context, state, activeWakeWord),
             const SizedBox(height: 16),
             Expanded(child: _buildChatHistory(context, state)),
             const SizedBox(height: 16),
