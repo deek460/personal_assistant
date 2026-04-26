@@ -92,7 +92,7 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
     if (name == null) return;
 
     try {
-      FilePickerResult? result = await FilePicker.platform.pickFiles(type: FileType.any);
+      FilePickerResult? result = await FilePicker.pickFiles(type: FileType.any);
       if (result != null && result.files.single.path != null) {
         String path = result.files.single.path!;
         String fileName = result.files.single.name;

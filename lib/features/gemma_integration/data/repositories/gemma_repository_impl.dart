@@ -1,13 +1,11 @@
 import 'package:flutter_gemma/flutter_gemma.dart';
 import 'package:flutter_gemma/core/model.dart';
-import 'package:flutter_gemma/pigeon.g.dart';
+import 'package:flutter_gemma/core/api/flutter_gemma.dart';
 import 'dart:io';
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import '../../domain/repositories/gemma_repository.dart';
-import '../../../../core/services/text_formatter_service.dart';
-import '../../../../core/services/image_processing_service.dart'; // NEW IMPORT
+import '../../../../core/services/image_processing_service.dart';
 
 class GemmaRepositoryImpl implements GemmaRepository {
   InferenceModel? _inferenceModel;
@@ -16,7 +14,6 @@ class GemmaRepositoryImpl implements GemmaRepository {
   PreferredBackend _currentBackend = PreferredBackend.gpu;
   static const String _crashMarkerKey = 'gpu_init_crash_marker';
 
-  // Inject the ML Kit processing service
   final ImageProcessingService _imageService = ImageProcessingService();
 
   @override
@@ -47,10 +44,8 @@ class GemmaRepositoryImpl implements GemmaRepository {
 
     if (success) {
       print("✅ GPU Init successful. Clearing crash marker.");
-      await prefs.setBool(_crashMarkerKey, false);
-    } else {
-      await prefs.setBool(_crashMarkerKey, false);
     }
+    await prefs.setBool(_crashMarkerKey, false);
 
     return success;
   }
@@ -64,7 +59,8 @@ class GemmaRepositoryImpl implements GemmaRepository {
         final board = androidInfo.board.toLowerCase();
         final model = androidInfo.model.toLowerCase();
 
-        if (hardware.contains('mt') || board.contains('mt') || hardware.contains('k68') || board.contains('k68')) {
+        if (hardware.contains('mt') || board.contains('mt') ||
+            hardware.contains('k68') || board.contains('k68')) {
           return true;
         }
         if (model.contains('m53') || model.contains('sm-m536')) {
@@ -83,28 +79,18 @@ class GemmaRepositoryImpl implements GemmaRepository {
 
       await disposeModel();
 
-      final gemma = FlutterGemmaPlugin.instance;
-      final modelManager = gemma.modelManager;
-
       String? finalPath;
 
       if (modelPath != null && modelPath.isNotEmpty) {
-        if (modelPath.startsWith('local://')) {
-          final cleanPath = modelPath.replaceFirst('local://', '');
-
-          if (File(cleanPath).existsSync()) {
-            finalPath = cleanPath;
-          }
-        } else {
-          if (File(modelPath).existsSync()) {
-            finalPath = modelPath;
-          }
+        final cleanPath = modelPath.startsWith('local://')
+            ? modelPath.replaceFirst('local://', '')
+            : modelPath;
+        if (File(cleanPath).existsSync()) {
+          finalPath = cleanPath;
         }
       }
 
-      if (finalPath == null) {
-        finalPath = await _findModelFile();
-      }
+      finalPath ??= await _findModelFile();
 
       if (finalPath == null) {
         print('❌ Model file not found. Ensure model is in Downloads folder.');
@@ -112,9 +98,16 @@ class GemmaRepositoryImpl implements GemmaRepository {
       }
 
       print('📦 Loading model from: $finalPath');
-      await modelManager.setModelPath(finalPath);
 
-      print(' Creating inference model...');
+      // Use the modern non-deprecated API: installModel().fromFile().install()
+      // This registers the model file with the plugin's model manager.
+      await FlutterGemma.installModel(
+        modelType: ModelType.gemmaIt,
+      ).fromFile(finalPath).install();
+
+      print('🏗️ Creating inference model...');
+
+      // Then create the inference model using the active installed model
       _inferenceModel = await FlutterGemmaPlugin.instance.createModel(
         modelType: ModelType.gemmaIt,
         preferredBackend: backend,
@@ -130,7 +123,7 @@ class GemmaRepositoryImpl implements GemmaRepository {
       print('❌ Failed to initialize with ${backend.toString()}: $e');
 
       if (backend == PreferredBackend.gpu) {
-        print('⚠️ GPU Init failed gracefully (Exception). Retrying with CPU...');
+        print('⚠️ GPU Init failed gracefully. Retrying with CPU...');
         _currentBackend = PreferredBackend.cpu;
         return _attemptLoad(modelPath: modelPath, backend: PreferredBackend.cpu);
       }
@@ -142,20 +135,27 @@ class GemmaRepositoryImpl implements GemmaRepository {
 
   Future<String?> _findModelFile() async {
     final possiblePaths = [
+      // Gemma 4
+      '/storage/emulated/0/Download/gemma-4-E2B-it.litertlm',
+      '/storage/emulated/0/Downloads/gemma-4-E2B-it.litertlm',
+      '/storage/emulated/0/Download/gemma-4-E4B-it.litertlm',
+      '/storage/emulated/0/Downloads/gemma-4-E4B-it.litertlm',
+      // Gemma 3n
+      '/storage/emulated/0/Download/gemma-3n-E2B-it-int4.task',
+      '/storage/emulated/0/Downloads/gemma-3n-E2B-it-int4.task',
+      // Gemma 3
       '/storage/emulated/0/Download/gemma3-1B-it-int4.task',
       '/storage/emulated/0/Downloads/gemma3-1B-it-int4.task',
       '/storage/emulated/0/Documents/gemma3-1B-it-int4.task',
       '/storage/emulated/0/gemma3-1B-it-int4.task',
-      '/storage/emulated/0/Download/gemma-3n-E2B-it-int4.task',
-      '/storage/emulated/0/Downloads/gemma-3n-E2B-it-int4.task',
     ];
 
-    for (String path in possiblePaths) {
+    for (final path in possiblePaths) {
       final file = File(path);
       if (file.existsSync()) {
         try {
-          final isReadable = await file.stat().then((stat) => stat.size > 0);
-          if (isReadable) return path;
+          final stat = await file.stat();
+          if (stat.size > 0) return path;
         } catch (e) { /* ignore */ }
       }
     }
@@ -164,14 +164,17 @@ class GemmaRepositoryImpl implements GemmaRepository {
 
   @override
   Future<String> generateResponse(String prompt) async {
-    if (!_isModelLoaded || _inferenceModel == null) throw Exception('Gemma model not initialized');
+    if (!_isModelLoaded || _inferenceModel == null) {
+      throw Exception('Gemma model not initialized');
+    }
     return "Error: Use Stream implementation";
   }
 
-  // UPDATED to accept imagePath and inject ML Kit context
   @override
   Stream<String> generateResponseStream(String prompt, {String? imagePath}) async* {
-    if (!_isModelLoaded || _inferenceModel == null) throw Exception('Gemma model not initialized');
+    if (!_isModelLoaded || _inferenceModel == null) {
+      throw Exception('Gemma model not initialized');
+    }
 
     try {
       final session = await _inferenceModel!.createSession(
@@ -180,7 +183,6 @@ class GemmaRepositoryImpl implements GemmaRepository {
         topK: 40,
       );
 
-      // --- ML KIT VISION PROCESSING ---
       String imageContext = "";
       if (imagePath != null && imagePath.isNotEmpty) {
         print("🔍 Processing image with ML Kit before sending to Gemma...");
@@ -193,7 +195,7 @@ class GemmaRepositoryImpl implements GemmaRepository {
 
       int garbageTokenCount = 0;
 
-      await for (String token in session.getResponseAsync()) {
+      await for (final String token in session.getResponseAsync()) {
         final cleanToken = token.trim();
 
         if (cleanToken.contains('<unused')) {
@@ -213,6 +215,7 @@ class GemmaRepositoryImpl implements GemmaRepository {
           yield token;
         }
       }
+
       await session.close();
     } catch (e) {
       print('❌ Error generating streaming response: $e');
@@ -220,7 +223,6 @@ class GemmaRepositoryImpl implements GemmaRepository {
     }
   }
 
-  // UPDATED: Dynamically injects image context into the prompt
   String _formatPrompt(String userInput, {String imageContext = ""}) {
     String finalInput = userInput;
     if (imageContext.isNotEmpty) {
