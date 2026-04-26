@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../../../../core/constants/app_constants.dart';
 import '../../../../core/theme/app_colors.dart';
 
 class TypingIndicator extends StatefulWidget {
@@ -17,7 +16,7 @@ class _TypingIndicatorState extends State<TypingIndicator>
   void initState() {
     super.initState();
     _controller = AnimationController(
-      duration: const Duration(milliseconds: 1500),
+      duration: const Duration(milliseconds: 1200),
       vsync: this,
     )..repeat();
   }
@@ -31,40 +30,47 @@ class _TypingIndicatorState extends State<TypingIndicator>
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppConstants.defaultPadding,
-        vertical: AppConstants.smallPadding,
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          CircleAvatar(
-            radius: 16,
-            backgroundColor: AppColors.primary,
+          // AI avatar
+          Container(
+            width: 30, height: 30,
+            decoration: BoxDecoration(
+              shape:  BoxShape.circle,
+              color:  AppColors.surfaceElevated,
+              border: Border.all(color: AppColors.surfaceBorder),
+            ),
             child: const Icon(
-              Icons.assistant,
-              size: 18,
-              color: Colors.white,
+              Icons.smart_toy_rounded,
+              size:  16,
+              color: AppColors.textSecondary,
             ),
           ),
-          const SizedBox(width: AppConstants.smallPadding),
+          const SizedBox(width: 8),
 
+          // Dots bubble
           Container(
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppConstants.defaultPadding,
-              vertical: AppConstants.smallPadding,
-            ),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             decoration: BoxDecoration(
-              color: AppColors.assistantMessageBg,
-              borderRadius: BorderRadius.circular(AppConstants.borderRadius),
+              color:  AppColors.aiBubble,
+              borderRadius: const BorderRadius.only(
+                topLeft:     Radius.circular(16),
+                topRight:    Radius.circular(16),
+                bottomRight: Radius.circular(16),
+                bottomLeft:  Radius.circular(4),
+              ),
+              border: Border.all(color: AppColors.surfaceBorder),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                _buildDot(0),
-                const SizedBox(width: 4),
-                _buildDot(1),
-                const SizedBox(width: 4),
-                _buildDot(2),
+                _Dot(controller: _controller, delay: 0.0),
+                const SizedBox(width: 5),
+                _Dot(controller: _controller, delay: 0.2),
+                const SizedBox(width: 5),
+                _Dot(controller: _controller, delay: 0.4),
               ],
             ),
           ),
@@ -72,24 +78,32 @@ class _TypingIndicatorState extends State<TypingIndicator>
       ),
     );
   }
+}
 
-  Widget _buildDot(int index) {
+class _Dot extends StatelessWidget {
+  final AnimationController controller;
+  final double delay;
+
+  const _Dot({required this.controller, required this.delay});
+
+  @override
+  Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, child) {
-        final progress = (_controller.value - (index * 0.2)) % 1.0;
-        final opacity = progress < 0.5
-            ? (progress * 2).clamp(0.3, 1.0)
-            : ((1.0 - progress) * 2).clamp(0.3, 1.0);
+      animation: controller,
+      builder: (_, __) {
+        final t       = (controller.value - delay) % 1.0;
+        final opacity = t < 0.5
+            ? (t * 2).clamp(0.25, 1.0)
+            : ((1.0 - t) * 2).clamp(0.25, 1.0);
+        final scale   = 0.75 + opacity * 0.25;
 
-        return Opacity(
-          opacity: opacity,
+        return Transform.scale(
+          scale: scale,
           child: Container(
-            width: 8,
-            height: 8,
+            width: 7, height: 7,
             decoration: BoxDecoration(
-              color: AppColors.primary,
               shape: BoxShape.circle,
+              color: AppColors.accent.withValues(alpha: opacity),
             ),
           ),
         );

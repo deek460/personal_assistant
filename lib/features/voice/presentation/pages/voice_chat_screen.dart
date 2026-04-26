@@ -1,19 +1,20 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:camera/camera.dart';
-import 'dart:io';
 import '../../../../core/navigation/app_router.dart';
 import '../../../../core/services/speech_to_text_service.dart';
 import '../../../../core/services/text_to_speech_service.dart';
-import '../../../../core/services/wake_word_service.dart'; // 🔴 RESTORED IMPORT
+import '../../../../core/services/wake_word_service.dart';
+import '../../../../core/theme/app_colors.dart';
 import '../logic/voice_cubit.dart';
-import '../../data/models/voice_chat_message.dart';
 import '../../../../features/gemma_integration/data/repositories/gemma_repository_impl.dart';
 import '../../../../features/gemma_integration/domain/usecases/generate_response_usecase.dart';
 import '../widgets/voice_message_bubble.dart';
+import '../widgets/voice_status_badge.dart';
+import '../widgets/mic_button.dart';
+import '../widgets/voice_input_bar.dart';
+import '../widgets/camera_pip_view.dart';
 import '../../../../shared/widgets/model_selector_dropdown.dart';
 import '../../../../core/models/ai_model.dart';
 import '../../../../core/services/model_management_service.dart';
@@ -28,13 +29,11 @@ class VoiceChatScreen extends StatefulWidget {
 }
 
 class _VoiceChatScreenState extends State<VoiceChatScreen> {
-  final ModelManagementService _modelService = ModelManagementService();
-  final ScrollController _scrollController = ScrollController();
-  final TextEditingController _debugInputController = TextEditingController();
+  final ModelManagementService _modelService   = ModelManagementService();
+  final ScrollController       _scrollController = ScrollController();
   AIModel? _selectedModel;
-  String _activeWakeWord = 'jarvis';
-
-  bool _isFullScreenVision = false;
+  String   _activeWakeWord  = 'jarvis';
+  bool     _isFullScreen    = false;
 
   @override
   void initState() {
@@ -46,13 +45,12 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
   @override
   void dispose() {
     _scrollController.dispose();
-    _debugInputController.dispose();
     super.dispose();
   }
 
   Future<void> _loadSelectedModel() async {
     final model = await _modelService.getSelectedModel();
-    setState(() => _selectedModel = model);
+    if (mounted) setState(() => _selectedModel = model);
   }
 
   Future<void> _loadWakeWord() async {
@@ -60,251 +58,192 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
     if (mounted) setState(() => _activeWakeWord = word);
   }
 
+  void _openSettings(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => BlocProvider(
+          create: (ctx) => SettingsCubit(
+            ModelManagementService(),
+            TextToSpeechService(),
+          )..loadSettings(),
+          child: SettingsScreen(
+            onSettingsChanged: () => context.read<VoiceCubit>().refreshSettings(),
+          ),
+        ),
+      ),
+    ).then((_) {
+      _loadWakeWord();
+      context.read<VoiceCubit>().refreshSettings();
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
-    // 🔴 INJECTED THE WAKE WORD SERVICE HERE
     return BlocProvider(
       create: (_) => VoiceCubit(
-          SpeechToTextService(),
-          TextToSpeechService(),
-          WakeWordService(),
-          GenerateResponseUseCase(GemmaRepositoryImpl())
+        SpeechToTextService(),
+        TextToSpeechService(),
+        WakeWordService(),
+        GenerateResponseUseCase(GemmaRepositoryImpl()),
       )..initializeServices(),
-      child: Builder(
-          builder: (context) {
-            return Scaffold(
-              appBar: AppBar(
-                title: const Text("Voice Chat"),
-                leading: IconButton(
-                  icon: const Icon(Icons.arrow_back),
-                  onPressed: () {
-                    if (context.canPop()) {
-                      context.pop();
-                    } else {
-                      context.go(AppRouter.home);
-                    }
-                  },
-                ),
-                actions: [
-                  IconButton(
-                    icon: const Icon(Icons.settings),
-                    tooltip: 'Settings',
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => BlocProvider(
-                            create: (ctx) => SettingsCubit(
-                              ModelManagementService(),
-                              TextToSpeechService(),
-                            )..loadSettings(),
-                            child: SettingsScreen(
-                              onSettingsChanged: () {
-                                // ✅ VoiceCubit is in scope here at the call site
-                                context.read<VoiceCubit>().refreshSettings();
-                              },
-                            ),
-                          ),
+      child: Builder(builder: (context) {
+        return Scaffold(
+          backgroundColor: AppColors.background,
+          appBar: _isFullScreen ? null : _buildAppBar(context),
+          body: BlocConsumer<VoiceCubit, VoiceState>(
+            listenWhen: (prev, curr) =>
+            prev.isLiveVisionEnabled != curr.isLiveVisionEnabled,
+            listener: (context, state) {
+              if (!state.isLiveVisionEnabled && _isFullScreen) {
+                setState(() => _isFullScreen = false);
+              }
+            },
+            builder: (context, state) {
+              final cameraReady = state.isLiveVisionEnabled &&
+                  state.cameraController?.value.isInitialized == true;
+
+              return Stack(
+                children: [
+                  // ── Fullscreen camera background ──────────────────────────
+                  if (cameraReady && _isFullScreen)
+                    CameraFullScreenOverlay(
+                      controller: state.cameraController!,
+                      onCollapse: () => setState(() => _isFullScreen = false),
+                    ),
+
+                  // ── Main content column ───────────────────────────────────
+                  Column(
+                    children: [
+                      // Model selector bar
+                      if (!_isFullScreen)
+                        _ModelBar(
+                          selectedModel:   _selectedModel,
+                          onModelSelected: (model) async {
+                            setState(() => _selectedModel = model);
+                            final cubit = context.read<VoiceCubit>();
+                            await cubit.stopListening();
+                            await cubit.initializeServices(specificModel: model);
+                          },
                         ),
-                      ).then((_) {
-                        // Re-initialize VoiceCubit when returning to apply changes
-                        _loadWakeWord();
-                        context.read<VoiceCubit>().refreshSettings();
-                      });
-                    },
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.clear_all),
-                    tooltip: 'Clear History',
-                    onPressed: () {
-                      context.read<VoiceCubit>().clearChatHistory();
-                    },
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.home),
-                    tooltip: 'Home',
-                    onPressed: () => context.go(AppRouter.home),
+
+                      // Body
+                      Expanded(
+                        child: Stack(
+                          children: [
+                            _VoiceChatBody(
+                              scrollController: _scrollController,
+                              activeWakeWord:   _activeWakeWord,
+                              isFullScreen:     _isFullScreen,
+                            ),
+
+                            // PiP camera (non-fullscreen)
+                            if (cameraReady && !_isFullScreen)
+                              Positioned(
+                                top: 12, right: 12,
+                                child: CameraPipView(
+                                  controller: state.cameraController!,
+                                  onExpand: () => setState(() => _isFullScreen = true),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+
+                      // Input bar
+                      VoiceInputBar(
+                        state:              state,
+                        isFullScreen:       _isFullScreen,
+                        onToggleLiveVision: () => context.read<VoiceCubit>().toggleLiveVision(),
+                        onSendText:         (t) => context.read<VoiceCubit>().processTextCommand(t),
+                        onPickCamera:       () => context.read<VoiceCubit>().pickImage(ImageSource.camera),
+                        onPickGallery:      () => context.read<VoiceCubit>().pickImage(ImageSource.gallery),
+                        onClearImage:       () => context.read<VoiceCubit>().clearPendingImage(),
+                      ),
+                    ],
                   ),
                 ],
-              ),
-              body: BlocConsumer<VoiceCubit, VoiceState>(
-                  listenWhen: (previous, current) => previous.isLiveVisionEnabled != current.isLiveVisionEnabled,
-                  listener: (context, state) {
-                    if (!state.isLiveVisionEnabled && _isFullScreenVision) {
-                      setState(() => _isFullScreenVision = false);
-                    }
-                  },
-                  builder: (context, state) {
-                    final isCameraReady = state.isLiveVisionEnabled && state.cameraController?.value.isInitialized == true;
-                    final Color inputBgColor = _isFullScreenVision ? Colors.black87 : Colors.grey.shade100;
-                    final Color iconColor = _isFullScreenVision ? Colors.white70 : Colors.blueGrey;
-                    final Color hintColor = _isFullScreenVision ? Colors.white54 : Colors.black54;
-                    final Color textColor = _isFullScreenVision ? Colors.white : Colors.black;
+              );
+            },
+          ),
+        );
+      }),
+    );
+  }
 
-                    return Stack(
-                      children: [
-                        if (isCameraReady && _isFullScreenVision)
-                          Positioned.fill(
-                            child: Container(
-                              color: Colors.black,
-                              child: Center(child: CameraPreview(state.cameraController!)),
-                            ),
-                          ),
-                        Positioned.fill(
-                          child: Container(
-                            color: Colors.transparent,
-                            child: Column(
-                              children: [
-                                Container(
-                                  color: _isFullScreenVision ? Colors.black54 : Colors.transparent,
-                                  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-                                  child: SizedBox(
-                                    width: double.infinity,
-                                    child: ModelSelectorDropdown(
-                                      selectedModel: _selectedModel,
-                                      onModelSelected: (model) async {
-                                        setState(() => _selectedModel = model);
-                                        final cubit = context.read<VoiceCubit>();
-                                        await cubit.stopListening();
-                                        await cubit.initializeServices(specificModel: model);
-                                      },
-                                    ),
-                                  ),
-                                ),
-                                Expanded(
-                                  child: Stack(
-                                    children: [
-                                      _VoiceChatBody(scrollController: _scrollController, isFullScreen: _isFullScreenVision, activeWakeWord: _activeWakeWord,),
-                                      if (isCameraReady && !_isFullScreenVision)
-                                        Positioned(
-                                          top: 16, right: 16, width: 100, height: 140,
-                                          child: Stack(
-                                            clipBehavior: Clip.none,
-                                            children: [
-                                              Container(
-                                                width: double.infinity, height: double.infinity,
-                                                decoration: BoxDecoration(
-                                                    borderRadius: BorderRadius.circular(12),
-                                                    border: Border.all(color: Colors.green, width: 3),
-                                                    boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 8, spreadRadius: 2)]
-                                                ),
-                                                child: ClipRRect(
-                                                  borderRadius: BorderRadius.circular(9),
-                                                  child: CameraPreview(state.cameraController!),
-                                                ),
-                                              ),
-                                              Positioned(
-                                                bottom: 4, right: 4,
-                                                child: GestureDetector(
-                                                  onTap: () => setState(() => _isFullScreenVision = true),
-                                                  child: Container(
-                                                    padding: const EdgeInsets.all(4),
-                                                    decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
-                                                    child: const Icon(Icons.fullscreen, color: Colors.white, size: 20),
-                                                  ),
-                                                ),
-                                              )
-                                            ],
-                                          ),
-                                        ),
-                                      if (isCameraReady && _isFullScreenVision)
-                                        Positioned(
-                                          top: 16, right: 16,
-                                          child: IconButton(
-                                            icon: const Icon(Icons.fullscreen_exit, color: Colors.white, size: 32, shadows: [Shadow(color: Colors.black, blurRadius: 4)]),
-                                            onPressed: () => setState(() => _isFullScreenVision = false),
-                                          ),
-                                        )
-                                    ],
-                                  ),
-                                ),
-                                Container(
-                                  color: inputBgColor,
-                                  padding: const EdgeInsets.all(8.0),
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      if (state.pendingImagePath != null)
-                                        Stack(
-                                          clipBehavior: Clip.none,
-                                          children: [
-                                            Container(
-                                              margin: const EdgeInsets.only(bottom: 8, left: 8),
-                                              height: 70, width: 70,
-                                              decoration: BoxDecoration(
-                                                borderRadius: BorderRadius.circular(8),
-                                                border: Border.all(color: Colors.blue, width: 2),
-                                                image: DecorationImage(image: FileImage(File(state.pendingImagePath!)), fit: BoxFit.cover),
-                                              ),
-                                            ),
-                                            Positioned(
-                                              top: -12, right: -12,
-                                              child: IconButton(icon: const Icon(Icons.cancel, color: Colors.red), onPressed: () => context.read<VoiceCubit>().clearPendingImage()),
-                                            )
-                                          ],
-                                        ),
-                                      Row(
-                                        children: [
-                                          IconButton(
-                                            icon: Icon(state.isLiveVisionEnabled ? Icons.visibility : Icons.visibility_off, color: state.isLiveVisionEnabled ? Colors.green : iconColor),
-                                            onPressed: () => context.read<VoiceCubit>().toggleLiveVision(),
-                                          ),
-                                          IconButton(icon: Icon(Icons.camera_alt, color: iconColor), onPressed: () => context.read<VoiceCubit>().pickImage(ImageSource.camera)),
-                                          IconButton(icon: Icon(Icons.photo_library, color: iconColor), onPressed: () => context.read<VoiceCubit>().pickImage(ImageSource.gallery)),
-                                          const SizedBox(width: 4),
-                                          Expanded(
-                                            child: TextField(
-                                              controller: _debugInputController,
-                                              style: TextStyle(color: textColor),
-                                              decoration: InputDecoration(
-                                                hintText: "Type or ask about an image...",
-                                                hintStyle: TextStyle(color: hintColor),
-                                                border: const OutlineInputBorder(),
-                                                enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: iconColor.withAlpha(100))),
-                                                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
-                                              ),
-                                            ),
-                                          ),
-                                          IconButton(
-                                            icon: Icon(Icons.send, color: _isFullScreenVision ? Colors.blue.shade300 : Colors.blue),
-                                            onPressed: () {
-                                              if (_debugInputController.text.isNotEmpty) {
-                                                context.read<VoiceCubit>().processTextCommand(_debugInputController.text);
-                                                _debugInputController.clear();
-                                              }
-                                            },
-                                          ),
-                                        ],
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    );
-                  }
-              ),
-            );
-          }
+  PreferredSizeWidget _buildAppBar(BuildContext context) {
+    return AppBar(
+      title: const Text('Assistant'),
+      leading: IconButton(
+        icon: const Icon(Icons.arrow_back_rounded),
+        onPressed: () => context.canPop() ? context.pop() : context.go(AppRouter.home),
+      ),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.delete_sweep_rounded),
+          tooltip: 'Clear history',
+          onPressed: () => context.read<VoiceCubit>().clearChatHistory(),
+        ),
+        IconButton(
+          icon: const Icon(Icons.tune_rounded),
+          tooltip: 'Settings',
+          onPressed: () => _openSettings(context),
+        ),
+        IconButton(
+          icon: const Icon(Icons.home_rounded),
+          tooltip: 'Home',
+          onPressed: () => context.go(AppRouter.home),
+        ),
+        const SizedBox(width: 4),
+      ],
+    );
+  }
+}
+
+// ── Model selector bar ───────────────────────────────────────────────────────
+
+class _ModelBar extends StatelessWidget {
+  final AIModel? selectedModel;
+  final ValueChanged<AIModel> onModelSelected;
+
+  const _ModelBar({required this.selectedModel, required this.onModelSelected});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: AppColors.surfaceBorder, width: 1)),
+      ),
+      child: ModelSelectorDropdown(
+        selectedModel:   selectedModel,
+        onModelSelected: onModelSelected,
       ),
     );
   }
 }
 
+// ── Body ─────────────────────────────────────────────────────────────────────
+
 class _VoiceChatBody extends StatelessWidget {
   final ScrollController scrollController;
-  final bool isFullScreen;
   final String activeWakeWord;
+  final bool isFullScreen;
 
-  const _VoiceChatBody({required this.scrollController, required this.isFullScreen, required this.activeWakeWord});
+  const _VoiceChatBody({
+    required this.scrollController,
+    required this.activeWakeWord,
+    required this.isFullScreen,
+  });
 
-  void _triggerScroll() {
+  void _scrollToBottom() {
     Future.delayed(const Duration(milliseconds: 100), () {
       if (scrollController.hasClients) {
-        scrollController.animateTo(scrollController.position.maxScrollExtent, duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+        scrollController.animateTo(
+          scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
       }
     });
   }
@@ -313,218 +252,301 @@ class _VoiceChatBody extends StatelessWidget {
   Widget build(BuildContext context) {
     return BlocConsumer<VoiceCubit, VoiceState>(
       listener: (context, state) {
-        if (state is SpeechUnavailable) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Speech recognition unavailable')));
-        if (state is VoiceStreamingResponse || state is VoiceResponseReady || (state is VoiceListening && state.recognizedWords.isNotEmpty)) _triggerScroll();
+        if (state is SpeechUnavailable) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Speech recognition unavailable')),
+          );
+        }
+        if (state is VoiceStreamingResponse ||
+            state is VoiceResponseReady ||
+            (state is VoiceListening && state.recognizedWords.isNotEmpty)) {
+          _scrollToBottom();
+        }
       },
       builder: (context, state) {
-        final cubit = context.read<VoiceCubit>();
         return Column(
           children: [
-            _buildStatusDisplay(context, state, activeWakeWord),
             const SizedBox(height: 16),
-            Expanded(child: _buildChatHistory(context, state)),
+
+            // Status badge
+            VoiceStatusBadge(
+              state:          state,
+              activeWakeWord: activeWakeWord,
+              dark:           isFullScreen,
+            ),
+
             const SizedBox(height: 16),
-            _buildControlButtons(context, state),
-            const SizedBox(height: 24),
+
+            // Chat history
+            Expanded(
+              child: isFullScreen
+                  ? _FullScreenHistory(state: state)
+                  : _ScrollableHistory(
+                state:            state,
+                scrollController: scrollController,
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // Control buttons
+            _ControlRow(state: state, isFullScreen: isFullScreen),
+
+            const SizedBox(height: 20),
           ],
         );
       },
     );
   }
+}
 
-  Widget _buildStatusDisplay(BuildContext context, VoiceState state, String activeWakeWord) {
-    String status;
-    Color statusColor;
+// ── Chat history variants ────────────────────────────────────────────────────
 
-    final displayWord = activeWakeWord.isNotEmpty ? '"${activeWakeWord[0].toUpperCase()}${activeWakeWord.substring(1)}"' : 'Wake Word';
+class _ScrollableHistory extends StatelessWidget {
+  final VoiceState state;
+  final ScrollController scrollController;
 
-    if (state is VoiceInitializing) {
-      status = (state as VoiceInitializing).message;
-      statusColor = Colors.orange;
-    } else if (state is VoiceWaitingForWakeWord) { // 🔴 RESTORED SENTINEL STATUS
-      status = 'Sentinel Active. Say $displayWord.';
-      statusColor = Colors.purple;
-    } else if (state is VoiceListening) {
-      status = 'Listening to your command...';
-      statusColor = Colors.red;
-    } else if (state is VoiceProcessing) {
-      status = 'Processing...';
-      statusColor = Colors.orange;
-    } else if (state is VoiceSpeaking || state is VoiceStreamingResponse) {
-      status = 'Speaking...';
-      statusColor = Colors.blue;
-    } else if (state is SpeechReady) {
-      status = 'Ready. Say $displayWord to start.';
-      statusColor = Colors.green;
-    } else if (state is VoiceIdle) {
-      status = 'Paused. Tap microphone to resume.';
-      statusColor = Colors.grey;
-    } else if (state is SpeechUnavailable) {
-      status = 'Microphone Unavailable';
-      statusColor = Colors.red;
-    } else if (state is VoiceError) {
-      status = (state as VoiceError).errorMessage;
-      statusColor = Colors.red;
-    } else {
-      status = 'Initializing...';
-      statusColor = Colors.grey;
-    }
+  const _ScrollableHistory({required this.state, required this.scrollController});
 
+  @override
+  Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 24),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      margin: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
-        color: statusColor.withAlpha(isFullScreen ? 200 : 38),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: statusColor),
+        color:        AppColors.surface,
+        borderRadius: BorderRadius.circular(16),
+        border:       Border.all(color: AppColors.surfaceBorder),
       ),
-      child: Text(
-        status,
-        textAlign: TextAlign.center,
-        style: TextStyle(color: isFullScreen ? Colors.white : statusColor, fontWeight: FontWeight.bold),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: Column(
+          children: [
+            Expanded(
+              child: state.chatHistory.isEmpty
+                  ? _EmptyState()
+                  : ListView.builder(
+                controller:  scrollController,
+                padding:     const EdgeInsets.all(16),
+                itemCount:   state.chatHistory.length,
+                itemBuilder: (_, i) => VoiceMessageBubble(message: state.chatHistory[i]),
+              ),
+            ),
+
+            // Live transcription strip
+            if (state is VoiceListening && (state as VoiceListening).recognizedWords.isNotEmpty)
+              _TranscriptionStrip(text: (state as VoiceListening).recognizedWords),
+          ],
+        ),
       ),
     );
   }
+}
 
-  Widget _buildChatHistory(BuildContext context, VoiceState state) {
-    if (isFullScreen) {
-      VoiceChatMessage? lastUserMsg;
-      VoiceChatMessage? lastAiMsg;
+class _FullScreenHistory extends StatelessWidget {
+  final VoiceState state;
+  const _FullScreenHistory({required this.state});
 
-      bool showRecentMessages = state is VoiceProcessing || state is VoiceStreamingResponse || state is VoiceResponseReady || state is VoiceSpeaking;
+  @override
+  Widget build(BuildContext context) {
+    final bool active = state is VoiceProcessing ||
+        state is VoiceStreamingResponse ||
+        state is VoiceResponseReady ||
+        state is VoiceSpeaking;
 
-      if (showRecentMessages && state.chatHistory.isNotEmpty) {
-        final lastMsg = state.chatHistory.last;
-        if (lastMsg.isUser) {
-          lastUserMsg = lastMsg;
-        } else {
-          lastAiMsg = lastMsg;
-          for (int i = state.chatHistory.length - 2; i >= 0; i--) {
-            if (state.chatHistory[i].isUser) {
-              lastUserMsg = state.chatHistory[i];
-              break;
-            }
+    if (!active && !(state is VoiceListening)) return const SizedBox.shrink();
+
+    // Find last user + last AI message
+    VoiceMessageBubble? userBubble;
+    VoiceMessageBubble? aiBubble;
+
+    if (state.chatHistory.isNotEmpty) {
+      final last = state.chatHistory.last;
+      if (last.isUser) {
+        userBubble = VoiceMessageBubble(message: last);
+      } else {
+        aiBubble = VoiceMessageBubble(message: last);
+        for (int i = state.chatHistory.length - 2; i >= 0; i--) {
+          if (state.chatHistory[i].isUser) {
+            userBubble = VoiceMessageBubble(message: state.chatHistory[i]);
+            break;
           }
         }
       }
-
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            if (lastUserMsg != null) VoiceMessageBubble(message: lastUserMsg) else const SizedBox.shrink(),
-            if (state is VoiceListening && state.recognizedWords.isNotEmpty)
-              Container(
-                width: double.infinity, padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(color: Colors.blue.withAlpha(200), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.blue.withAlpha(100))),
-                child: Text('Hearing: ${state.recognizedWords}', style: const TextStyle(fontStyle: FontStyle.italic, color: Colors.white)),
-              )
-            else if (lastAiMsg != null) VoiceMessageBubble(message: lastAiMsg) else const SizedBox.shrink(),
-          ],
-        ),
-      );
     }
 
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 24),
-      decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade300), borderRadius: BorderRadius.circular(12)),
-      child: Column(
-        children: [
-          Expanded(
-            child: state.chatHistory.isEmpty
-                ? const Center(child: Text('Say your wake word followed by your question!', style: TextStyle(fontStyle: FontStyle.italic, color: Colors.black87)))
-                : ListView.builder(
-              controller: scrollController, padding: const EdgeInsets.all(16),
-              itemCount: state.chatHistory.length,
-              itemBuilder: (context, index) => VoiceMessageBubble(message: state.chatHistory[index]),
-            ),
-          ),
-          if (state is VoiceListening && state.recognizedWords.isNotEmpty)
-            Container(
-              width: double.infinity, margin: const EdgeInsets.all(16), padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(color: Colors.blue.withAlpha(25), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.blue.withAlpha(100))),
-              child: Text('Hearing: ${state.recognizedWords}', style: const TextStyle(fontStyle: FontStyle.italic, color: Colors.black87)),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildControlButtons(BuildContext context, VoiceState state) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          _buildMicButton(context, state),
-          if (state is VoiceSpeaking || state is VoiceStreamingResponse) _buildStopSpeakingButton(context),
-          if (state is VoiceIdle || state is SpeechReady) _buildRestartButton(context),
+          if (userBubble != null) userBubble else const SizedBox.shrink(),
+          if (state is VoiceListening && (state as VoiceListening).recognizedWords.isNotEmpty)
+            _TranscriptionStrip(text: (state as VoiceListening).recognizedWords, dark: true)
+          else if (aiBubble != null) aiBubble else const SizedBox.shrink(),
         ],
       ),
     );
   }
+}
 
-  Widget _buildMicButton(BuildContext context, VoiceState state) {
-    bool isListening = state is VoiceListening; // Native STT is active
-    bool isSentinel = state is VoiceWaitingForWakeWord; // 🔴 ONNX is active
-    bool isProcessing = state is VoiceProcessing;
-    bool canInteract = true;
-
-    return GestureDetector(
-      onTap: canInteract ? () {
-        final cubit = context.read<VoiceCubit>();
-        if (isListening || isSentinel) {
-          cubit.stopListening();
-        } else if (state is VoiceIdle || state is SpeechReady) {
-          // If manually tapped, jump straight to dictation (skip ONNX sentinel)
-          cubit.startActiveDictation();
-        }
-      } : null,
-      child: Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: isListening
-              ? Colors.red.withAlpha(isFullScreen ? 150 : 38)
-              : isSentinel
-              ? Colors.purple.withAlpha(isFullScreen ? 150 : 38)
-              : isProcessing
-              ? Colors.orange.withAlpha(isFullScreen ? 150 : 38)
-              : Colors.blue.withAlpha(isFullScreen ? 150 : 38),
-          border: Border.all(
-            color: isListening ? Colors.red : isSentinel ? Colors.purple : isProcessing ? Colors.orange : Colors.blue,
-            width: 3,
+class _EmptyState extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.spatial_audio_off_rounded, size: 40, color: AppColors.textDisabled),
+          const SizedBox(height: 12),
+          Text(
+            'Say your wake word to begin',
+            style: Theme.of(context).textTheme.bodyMedium,
           ),
-        ),
-        child: Icon(
-          isListening || isSentinel ? Icons.stop : isProcessing ? Icons.sync : Icons.mic,
-          size: 48,
-          color: isFullScreen ? Colors.white : (isListening ? Colors.red : isSentinel ? Colors.purple : isProcessing ? Colors.orange : Colors.blue),
-        ),
+        ],
       ),
     );
   }
+}
 
-  Widget _buildStopSpeakingButton(BuildContext context) {
-    return GestureDetector(
-      onTap: () => context.read<VoiceCubit>().stopSpeaking(),
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.red.withAlpha(isFullScreen ? 150 : 38), border: Border.all(color: Colors.red, width: 2)),
-        child: Icon(Icons.volume_off, size: 32, color: isFullScreen ? Colors.white : Colors.red),
+class _TranscriptionStrip extends StatelessWidget {
+  final String text;
+  final bool dark;
+  const _TranscriptionStrip({required this.text, this.dark = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width:   double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        color:  dark
+            ? AppColors.listening.withValues(alpha: 0.15)
+            : AppColors.listening.withValues(alpha: 0.06),
+        border: Border(top: BorderSide(color: AppColors.listening.withValues(alpha: 0.2))),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.hearing_rounded, size: 14, color: AppColors.listening),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(
+                fontFamily:  'DM Sans',
+                fontStyle:   FontStyle.italic,
+                fontSize:    14,
+                color:       dark ? Colors.white70 : AppColors.listening,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
+}
 
-  Widget _buildRestartButton(BuildContext context) {
-    return GestureDetector(
-      // 🔴 RESTART INTO SENTINEL MODE
-      onTap: () => context.read<VoiceCubit>().startSentinelMode(),
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.green.withAlpha(isFullScreen ? 150 : 38), border: Border.all(color: Colors.green, width: 2)),
-        child: Icon(Icons.refresh, size: 32, color: isFullScreen ? Colors.white : Colors.green),
+// ── Control buttons row ──────────────────────────────────────────────────────
+
+class _ControlRow extends StatelessWidget {
+  final VoiceState state;
+  final bool isFullScreen;
+
+  const _ControlRow({required this.state, required this.isFullScreen});
+
+  MicButtonState get _micState {
+    if (state is VoiceWaitingForWakeWord) return MicButtonState.sentinel;
+    if (state is VoiceListening)          return MicButtonState.listening;
+    if (state is VoiceProcessing)         return MicButtonState.processing;
+    if (state is VoiceSpeaking || state is VoiceStreamingResponse) return MicButtonState.speaking;
+    return MicButtonState.idle;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cubit   = context.read<VoiceCubit>();
+    final isBusy  = state is VoiceListening || state is VoiceWaitingForWakeWord;
+    final isSpeaking = state is VoiceSpeaking || state is VoiceStreamingResponse;
+    final isIdle  = state is VoiceIdle || state is SpeechReady;
+
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        // Restart button (shown when idle/paused)
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 200),
+          child: isIdle
+              ? Padding(
+            key: const ValueKey('restart'),
+            padding: const EdgeInsets.only(right: 24),
+            child: _CircleAction(
+              icon:    Icons.refresh_rounded,
+              color:   AppColors.success,
+              tooltip: 'Resume sentinel',
+              onTap:   () => cubit.startSentinelMode(),
+            ),
+          )
+              : const SizedBox(key: ValueKey('restart_empty'), width: 64),
+        ),
+
+        // Main mic button
+        MicButton(
+          state: _micState,
+          onTap: () {
+            if (isBusy)      cubit.stopListening();
+            else if (isIdle) cubit.startActiveDictation();
+          },
+        ),
+
+        // Stop speaking button (shown when TTS is active)
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 200),
+          child: isSpeaking
+              ? Padding(
+            key: const ValueKey('stop'),
+            padding: const EdgeInsets.only(left: 24),
+            child: _CircleAction(
+              icon:    Icons.volume_off_rounded,
+              color:   AppColors.error,
+              tooltip: 'Stop speaking',
+              onTap:   () => cubit.stopSpeaking(),
+            ),
+          )
+              : const SizedBox(key: ValueKey('stop_empty'), width: 64),
+        ),
+      ],
+    );
+  }
+}
+
+class _CircleAction extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  const _CircleAction({
+    required this.icon,
+    required this.color,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width:  52,
+          height: 52,
+          decoration: BoxDecoration(
+            shape:  BoxShape.circle,
+            color:  color.withValues(alpha: 0.12),
+            border: Border.all(color: color.withValues(alpha: 0.4), width: 1.5),
+          ),
+          child: Icon(icon, color: color, size: 24),
+        ),
       ),
     );
   }

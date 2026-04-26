@@ -1,174 +1,160 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../domain/entities/chat_message.dart';
-import 'package:flutter/services.dart'; // still available if needed elsewhere
 
-/// MessageBubble now supports a local toggle to switch between raw and formatted text.
-/// Tapping the small toggle icon flips the displayed text between message.rawContent
-/// and message.formattedContent (falls back to message.content when either is null).
 class MessageBubble extends StatefulWidget {
   final ChatMessage message;
 
-  const MessageBubble({
-    super.key,
-    required this.message,
-  });
+  const MessageBubble({super.key, required this.message});
 
   @override
   State<MessageBubble> createState() => _MessageBubbleState();
 }
 
 class _MessageBubbleState extends State<MessageBubble> {
-  // Local toggle: when true show raw content if available, otherwise show formatted/content.
   bool _showRaw = false;
+
+  String get _displayText {
+    if (_showRaw && widget.message.rawContent?.isNotEmpty == true) {
+      return widget.message.rawContent!;
+    }
+    if (widget.message.formattedContent?.isNotEmpty == true) {
+      return widget.message.formattedContent!;
+    }
+    return widget.message.content;
+  }
 
   @override
   Widget build(BuildContext context) {
-    final message = widget.message;
-    final displayed = _computeDisplayedText(message);
+    final msg    = widget.message;
+    final isUser = msg.isFromUser;
 
     return Padding(
       padding: const EdgeInsets.symmetric(
         horizontal: AppConstants.defaultPadding,
-        vertical: AppConstants.smallPadding,
+        vertical:   6,
       ),
       child: Row(
-        mainAxisAlignment:
-        message.isFromUser ? MainAxisAlignment.end : MainAxisAlignment.start,
+        mainAxisAlignment: isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          if (!message.isFromUser) ...[
-            CircleAvatar(
-              radius: 16,
-              backgroundColor: AppColors.primary,
-              child: const Icon(
-                Icons.assistant,
-                size: 18,
-                color: Colors.white,
-              ),
-            ),
-            const SizedBox(width: AppConstants.smallPadding),
+          if (!isUser) ...[
+            _Avatar(isUser: false),
+            const SizedBox(width: 8),
           ],
 
           Flexible(
             child: Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: AppConstants.defaultPadding,
-                vertical: AppConstants.smallPadding,
+              constraints: BoxConstraints(
+                maxWidth: MediaQuery.of(context).size.width * 0.72,
               ),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(
-                color: message.isFromUser
-                    ? AppColors.userMessageBg
-                    : AppColors.assistantMessageBg,
-                borderRadius: BorderRadius.circular(AppConstants.borderRadius),
+                color: isUser ? AppColors.userBubble : AppColors.aiBubble,
+                borderRadius: BorderRadius.only(
+                  topLeft:     const Radius.circular(16),
+                  topRight:    const Radius.circular(16),
+                  bottomLeft:  Radius.circular(isUser ? 16 : 4),
+                  bottomRight: Radius.circular(isUser ? 4 : 16),
+                ),
+                border: Border.all(
+                  color: isUser
+                      ? AppColors.accent.withValues(alpha: 0.2)
+                      : AppColors.surfaceBorder,
+                ),
               ),
               child: Stack(
                 children: [
-                  // Message content + timestamp
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      SelectableText(
-                        displayed,
-                        style: TextStyle(
-                          color: message.isFromUser
-                              ? AppColors.messageText
-                              : AppColors.assistantMessageText,
-                          fontSize: 16,
+                      Padding(
+                        padding: EdgeInsets.only(right: isUser ? 0 : 22),
+                        child: SelectableText(
+                          _displayText,
+                          style: TextStyle(
+                            fontFamily: 'DM Sans',
+                            fontSize:   15,
+                            height:     1.45,
+                            color:      isUser
+                                ? AppColors.userBubbleText
+                                : AppColors.aiBubbleText,
+                          ),
                         ),
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        _formatTime(message.timestamp),
-                        style: TextStyle(
-                          color: (message.isFromUser
-                              ? AppColors.messageText
-                              : AppColors.assistantMessageText)
-                              .withValues(alpha: 0.7),
-                          fontSize: 12,
+                        _formatTime(msg.timestamp),
+                        style: const TextStyle(
+                          fontFamily: 'DM Mono',
+                          fontSize:   11,
+                          color:      AppColors.textDisabled,
                         ),
                       ),
                     ],
                   ),
 
-                  // Small toggle button in top-right of bubble for non-user messages
-                  Positioned(
-                    top: 0,
-                    right: 0,
-                    child: _buildToggleButton(message),
-                  ),
+                  if (!isUser)
+                    Positioned(
+                      top: 0, right: 0,
+                      child: GestureDetector(
+                        onTap: () => setState(() => _showRaw = !_showRaw),
+                        child: Tooltip(
+                          message: _showRaw ? 'Show formatted' : 'Show raw',
+                          child: Icon(
+                            _showRaw ? Icons.visibility_off_rounded : Icons.visibility_rounded,
+                            size:  16,
+                            color: AppColors.textDisabled,
+                          ),
+                        ),
+                      ),
+                    ),
                 ],
               ),
+            ).animate().fadeIn(duration: 180.ms).slideY(
+              begin: 0.06,
+              duration: 200.ms,
+              curve: Curves.easeOutCubic,
             ),
           ),
 
-          if (message.isFromUser) ...[
-            const SizedBox(width: AppConstants.smallPadding),
-            CircleAvatar(
-              radius: 16,
-              backgroundColor: AppColors.secondary,
-              child: const Icon(
-                Icons.person,
-                size: 18,
-                color: Colors.white,
-              ),
-            ),
+          if (isUser) ...[
+            const SizedBox(width: 8),
+            _Avatar(isUser: true),
           ],
         ],
       ),
     );
   }
 
-  String _computeDisplayedText(ChatMessage message) {
-    // If toggle is set and raw available -> raw
-    if (_showRaw && (message.rawContent != null && message.rawContent!.isNotEmpty)) {
-      return message.rawContent!;
-    }
+  String _formatTime(DateTime dt) =>
+      '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+}
 
-    // Otherwise prefer formatted if available, else content
-    if (message.formattedContent != null && message.formattedContent!.isNotEmpty) {
-      return message.formattedContent!;
-    }
+class _Avatar extends StatelessWidget {
+  final bool isUser;
+  const _Avatar({required this.isUser});
 
-    return message.content;
-  }
-
-  Widget _buildToggleButton(ChatMessage message) {
-    // Show toggle only for assistant responses (optional). If desired, show for all.
-    if (message.isFromUser == true) {
-      // for user bubbles return a small placeholder to keep layout consistent
-      return const SizedBox.shrink();
-    }
-
-    // Icon changes visually when in raw mode
-    final icon = _showRaw ? Icons.visibility_off : Icons.visibility;
-
-    return GestureDetector(
-      onTap: () {
-        setState(() {
-          _showRaw = !_showRaw;
-        });
-
-        // Optional: small haptic feedback
-        // HapticFeedback.selectionClick();
-      },
-      child: Container(
-        margin: const EdgeInsets.all(4),
-        padding: const EdgeInsets.all(4),
-        decoration: BoxDecoration(
-          color: AppColors.primary.withValues(alpha: 0.12),
-          shape: BoxShape.circle,
-        ),
-        child: Icon(
-          icon,
-          size: 16,
-          color: AppColors.primary,
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 30, height: 30,
+      decoration: BoxDecoration(
+        shape:  BoxShape.circle,
+        color:  isUser ? AppColors.accentDim : AppColors.surfaceElevated,
+        border: Border.all(
+          color: isUser
+              ? AppColors.accent.withValues(alpha: 0.4)
+              : AppColors.surfaceBorder,
         ),
       ),
+      child: Icon(
+        isUser ? Icons.person_rounded : Icons.smart_toy_rounded,
+        size:  16,
+        color: isUser ? AppColors.accent : AppColors.textSecondary,
+      ),
     );
-  }
-
-  String _formatTime(DateTime dateTime) {
-    return '${dateTime.hour.toString().padLeft(2, '0')}:${dateTime.minute.toString().padLeft(2, '0')}';
   }
 }

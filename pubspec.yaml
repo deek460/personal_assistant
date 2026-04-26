@@ -123,6 +123,25 @@ flutter:
       - assets/vqa_test/dataset.json
       - assets/vqa_test/images/
 
+  fonts:
+      - family: DM Sans
+        fonts:
+          - asset: assets/fonts/DMSans-Regular.ttf
+          - asset: assets/fonts/DMSans-Medium.ttf
+            weight: 500
+          - asset: assets/fonts/DMSans-SemiBold.ttf
+            weight: 600
+          - asset: assets/fonts/DMSans-Bold.ttf
+            weight: 700
+          - asset: assets/fonts/DMSans-Italic.ttf
+            style: italic
+
+      - family: DM Mono
+        fonts:
+          - asset: assets/fonts/DMMono-Regular.ttf
+          - asset: assets/fonts/DMMono-Medium.ttf
+            weight: 500
+
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in
   # the material Icons class.

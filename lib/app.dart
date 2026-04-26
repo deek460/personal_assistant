@@ -9,6 +9,7 @@ import 'features/chat/presentation/logic/chat_cubit.dart';
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
+
   @override
   Widget build(BuildContext context) {
     return MultiBlocProvider(
@@ -18,7 +19,9 @@ class MyApp extends StatelessWidget {
       ],
       child: MaterialApp.router(
         title: StringConstants.homeTitle,
-        theme: AppTheme.lightTheme,
+        theme:      AppTheme.darkTheme,
+        darkTheme:  AppTheme.darkTheme,
+        themeMode:  ThemeMode.dark,
         routerConfig: AppRouter.router,
         debugShowCheckedModeBanner: false,
       ),

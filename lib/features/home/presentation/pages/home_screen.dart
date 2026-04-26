@@ -1,143 +1,63 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/constants/string_constants.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/navigation/app_router.dart';
-import '../../../../features/voice/presentation/widgets/mic_button.dart';
-import '../../../../features/voice/presentation/logic/voice_cubit.dart';
-import '../../../../core/services/speech_to_text_service.dart';
-import '../../../../core/services/text_to_speech_service.dart';
-import '../../../../features/gemma_integration/data/repositories/gemma_repository_impl.dart';  // ADD THIS
-import '../../../../features/gemma_integration/domain/usecases/generate_response_usecase.dart';
-import '../../../../core/services/wake_word_service.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    // Provide VoiceCubit here with required services (inject or create)
-    return BlocProvider(
-      create: (_) => VoiceCubit(
-        SpeechToTextService(),
-        TextToSpeechService(),
-        WakeWordService(), // FIX: ADD WAKE WORD SERVICE HERE
-        GenerateResponseUseCase(GemmaRepositoryImpl()),
-      ),
-      child: const _HomeContent(),
-    );
+    return const _HomeContent();
   }
 }
 
 class _HomeContent extends StatelessWidget {
-  const _HomeContent({super.key});
+  const _HomeContent();
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text(StringConstants.homeTitle),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.chat),
-            onPressed: () => context.go(AppRouter.chat),
-          ),
-        ],
-      ),
+      backgroundColor: AppColors.background,
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.all(AppConstants.defaultPadding),
-          child: BlocBuilder<VoiceCubit, VoiceState>(
-            builder: (context, state) {
-              MicButtonState micState = MicButtonState.idle;
-              String statusText = StringConstants.tapToSpeak;
+          padding: const EdgeInsets.symmetric(horizontal: 28),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SizedBox(height: 48),
 
-              if (state is VoiceListening) {
-                micState = MicButtonState.listening;
-                statusText = StringConstants.listening;
-              } else if (state is VoiceProcessing) {
-                micState = MicButtonState.processing;
-                statusText = 'Processing...';
-              }
+              // ── Header ────────────────────────────────────────────────────
+              _Header()
+                  .animate()
+                  .fadeIn(duration: 500.ms)
+                  .slideY(begin: -0.1, duration: 500.ms, curve: Curves.easeOutCubic),
 
-              return Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Expanded(
-                    flex: 2,
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.assistant,
-                          size: 80,
-                          color: AppColors.primary,
-                        ),
-                        const SizedBox(height: AppConstants.defaultPadding),
-                        Text(
-                          StringConstants.homeSubtitle,
-                          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                            color: AppColors.textSecondary,
-                            fontWeight: FontWeight.w500,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ],
-                    ),
-                  ),
-                  Expanded(
-                    flex: 3,
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        MicButton(
-                          state: micState,
-                          onTap: () {
-                            print("Mic button tapped"); // Debug print
-                            GoRouter.of(context).go(AppRouter.voiceChat);
-                          },
-                          onLongPress: () => context.go(AppRouter.chat),
-                        ),
-                        const SizedBox(height: AppConstants.defaultPadding),
-                        Text(
-                          statusText,
-                          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                            color: AppColors.textSecondary,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Expanded(
-                    flex: 1,
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                      children: [
-                        _QuickActionButton(
-                          icon: Icons.chat,
-                          label: StringConstants.chat,
-                          onTap: () => context.go(AppRouter.chat),
-                        ),
-                        _QuickActionButton(
-                          icon: Icons.settings,
-                          label: StringConstants.settings,
-                          onTap: () {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Settings coming soon!'),
-                              ),
-                            );
-                          },
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              );
-            },
+              const Spacer(),
+
+              // ── Central mic CTA ───────────────────────────────────────────
+              Center(
+                child: _MicCta(
+                  onTap: () => context.go(AppRouter.voiceChat),
+                ).animate(delay: 150.ms)
+                    .fadeIn(duration: 500.ms)
+                    .scale(begin: const Offset(0.9, 0.9), duration: 500.ms, curve: Curves.easeOutBack),
+              ),
+
+              const Spacer(),
+
+              // ── Quick actions grid ────────────────────────────────────────
+              _QuickActionsRow()
+                  .animate(delay: 300.ms)
+                  .fadeIn(duration: 400.ms)
+                  .slideY(begin: 0.1, duration: 400.ms, curve: Curves.easeOutCubic),
+
+              const SizedBox(height: 32),
+            ],
           ),
         ),
       ),
@@ -145,52 +65,264 @@ class _HomeContent extends StatelessWidget {
   }
 }
 
-class _QuickActionButton extends StatelessWidget {
+// ── Header ───────────────────────────────────────────────────────────────────
+
+class _Header extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final hour = DateTime.now().hour;
+    final greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          greeting,
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+            color: AppColors.textSecondary,
+            letterSpacing: 0.2,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          StringConstants.homeTitle,
+          style: Theme.of(context).textTheme.displayLarge?.copyWith(
+            color: AppColors.textPrimary,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ── Central mic CTA ───────────────────────────────────────────────────────────
+
+class _MicCta extends StatefulWidget {
+  final VoidCallback onTap;
+  const _MicCta({required this.onTap});
+
+  @override
+  State<_MicCta> createState() => _MicCtaState();
+}
+
+class _MicCtaState extends State<_MicCta> with SingleTickerProviderStateMixin {
+  late AnimationController _ring;
+  bool _pressed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _ring = AnimationController(vsync: this, duration: const Duration(milliseconds: 2000))
+      ..repeat();
+  }
+
+  @override
+  void dispose() {
+    _ring.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        GestureDetector(
+          onTapDown:   (_) => setState(() => _pressed = true),
+          onTapUp:     (_) { setState(() => _pressed = false); widget.onTap(); },
+          onTapCancel: ()  => setState(() => _pressed = false),
+          child: SizedBox(
+            width:  180,
+            height: 180,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                // Outer slow ring
+                AnimatedBuilder(
+                  animation: _ring,
+                  builder: (_, __) {
+                    final t = _ring.value;
+                    return Transform.scale(
+                      scale: 1.0 + t * 0.35,
+                      child: Container(
+                        width: 130, height: 130,
+                        decoration: BoxDecoration(
+                          shape:  BoxShape.circle,
+                          border: Border.all(
+                            color: AppColors.accent.withValues(alpha: (1.0 - t) * 0.2),
+                            width: 1.5,
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+
+                // Inner ring
+                AnimatedBuilder(
+                  animation: _ring,
+                  builder: (_, __) {
+                    final t = (_ring.value + 0.4) % 1.0;
+                    return Transform.scale(
+                      scale: 1.0 + t * 0.2,
+                      child: Container(
+                        width: 130, height: 130,
+                        decoration: BoxDecoration(
+                          shape:  BoxShape.circle,
+                          border: Border.all(
+                            color: AppColors.accent.withValues(alpha: (1.0 - t) * 0.15),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+
+                // Button
+                AnimatedScale(
+                  scale:    _pressed ? 0.94 : 1.0,
+                  duration: const Duration(milliseconds: 120),
+                  child: Container(
+                    width: 120, height: 120,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: AppColors.accentDim,
+                      border: Border.all(
+                        color: AppColors.accent.withValues(alpha: 0.5),
+                        width: 1.5,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color:       AppColors.accent.withValues(alpha: 0.2),
+                          blurRadius:  40,
+                          spreadRadius: 0,
+                        ),
+                      ],
+                    ),
+                    child: const Icon(
+                      Icons.mic_none_rounded,
+                      color: AppColors.accent,
+                      size:  48,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        const SizedBox(height: 20),
+
+        Text(
+          'Tap to talk',
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+            color: AppColors.textSecondary,
+            letterSpacing: 0.3,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ── Quick actions ─────────────────────────────────────────────────────────────
+
+class _QuickActionsRow extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: _ActionCard(
+            icon:    Icons.chat_bubble_outline_rounded,
+            label:   'Chat',
+            sub:     'Text mode',
+            color:   AppColors.accent,
+            onTap:   () => context.go(AppRouter.chat),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: _ActionCard(
+            icon:    Icons.tune_rounded,
+            label:   'Settings',
+            sub:     'Configure',
+            color:   AppColors.sentinel,
+            onTap:   () => ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Open from voice screen')),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ActionCard extends StatefulWidget {
   final IconData icon;
   final String label;
+  final String sub;
+  final Color color;
   final VoidCallback onTap;
 
-  const _QuickActionButton({
+  const _ActionCard({
     required this.icon,
     required this.label,
+    required this.sub,
+    required this.color,
     required this.onTap,
   });
 
   @override
+  State<_ActionCard> createState() => _ActionCardState();
+}
+
+class _ActionCardState extends State<_ActionCard> {
+  bool _pressed = false;
+
+  @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(AppConstants.borderRadius),
-      child: Container(
-        padding: const EdgeInsets.symmetric(
-          horizontal: AppConstants.defaultPadding,
-          vertical: AppConstants.smallPadding,
-        ),
-        decoration: BoxDecoration(
-          color: AppColors.primaryLight.withAlpha(25),
-          borderRadius: BorderRadius.circular(AppConstants.borderRadius),
-          border: Border.all(
-            color: AppColors.primaryLight,
-            width: 1,
+    return GestureDetector(
+      onTapDown:   (_) => setState(() => _pressed = true),
+      onTapUp:     (_) { setState(() => _pressed = false); widget.onTap(); },
+      onTapCancel: ()  => setState(() => _pressed = false),
+      child: AnimatedScale(
+        scale:    _pressed ? 0.96 : 1.0,
+        duration: const Duration(milliseconds: 120),
+        child: Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color:  AppColors.surface,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: AppColors.surfaceBorder),
           ),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              icon,
-              color: AppColors.primary,
-              size: 24,
-            ),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: AppColors.primary,
-                fontWeight: FontWeight.w500,
+          child: Row(
+            children: [
+              Container(
+                width: 40, height: 40,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: widget.color.withValues(alpha: 0.12),
+                ),
+                child: Icon(widget.icon, color: widget.color, size: 20),
               ),
-            ),
-          ],
+              const SizedBox(width: 12),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    widget.label,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                  Text(
+                    widget.sub,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );

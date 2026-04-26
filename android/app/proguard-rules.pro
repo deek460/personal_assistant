@@ -21,6 +21,12 @@
 -dontwarn org.openjsse.javax.net.ssl.SSLParameters
 -dontwarn org.openjsse.javax.net.ssl.SSLSocket
 -dontwarn org.openjsse.net.ssl.OpenJSSE
+# ML Kit Text Recognition - keep all language models
+-keep class com.google.mlkit.vision.text.** { *; }
+-dontwarn com.google.mlkit.vision.text.chinese.**
+-dontwarn com.google.mlkit.vision.text.devanagari.**
+-dontwarn com.google.mlkit.vision.text.japanese.**
+-dontwarn com.google.mlkit.vision.text.korean.**
 
 ## MediaPipe and Protobuf Keep Rules
 -keep class com.google.mediapipe.** { *; }

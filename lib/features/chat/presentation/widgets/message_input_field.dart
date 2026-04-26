@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../../../core/constants/app_constants.dart';
-import '../../../../core/constants/string_constants.dart';
+import 'package:flutter/services.dart';
 import '../../../../core/theme/app_colors.dart';
 
 class MessageInputField extends StatefulWidget {
@@ -25,9 +24,8 @@ class _MessageInputFieldState extends State<MessageInputField> {
   void initState() {
     super.initState();
     _controller.addListener(() {
-      setState(() {
-        _canSend = _controller.text.trim().isNotEmpty && !widget.isLoading;
-      });
+      final can = _controller.text.trim().isNotEmpty && !widget.isLoading;
+      if (can != _canSend) setState(() => _canSend = can);
     });
   }
 
@@ -37,74 +35,73 @@ class _MessageInputFieldState extends State<MessageInputField> {
     super.dispose();
   }
 
-  void _sendMessage() {
-    if (_canSend) {
-      final message = _controller.text.trim();
-      _controller.clear();
-      widget.onSendMessage(message);
-    }
+  void _send() {
+    if (!_canSend) return;
+    HapticFeedback.lightImpact();
+    final msg = _controller.text.trim();
+    _controller.clear();
+    widget.onSendMessage(msg);
   }
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(AppConstants.defaultPadding),
-      decoration: BoxDecoration(
-        color: Theme.of(context).scaffoldBackgroundColor,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.1),
-            offset: const Offset(0, -2),
-            blurRadius: 4,
-          ),
-        ],
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: const BoxDecoration(
+        color:  AppColors.surface,
+        border: Border(top: BorderSide(color: AppColors.surfaceBorder, width: 1)),
       ),
       child: SafeArea(
+        top: false,
         child: Row(
           children: [
             Expanded(
               child: TextField(
-                controller: _controller,
-                enabled: !widget.isLoading,
-                decoration: InputDecoration(
-                  hintText: StringConstants.typeMessage,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(24),
-                    borderSide: BorderSide.none,
-                  ),
-                  filled: true,
-                  fillColor: Colors.grey.shade100,
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: AppConstants.defaultPadding,
-                    vertical: AppConstants.smallPadding,
-                  ),
+                controller:      _controller,
+                enabled:         !widget.isLoading,
+                style: const TextStyle(
+                  fontFamily: 'DM Sans',
+                  fontSize:   15,
+                  color:      AppColors.textPrimary,
                 ),
-                onSubmitted: (_) => _sendMessage(),
+                decoration: const InputDecoration(
+                  hintText: 'Message...',
+                ),
+                onSubmitted: (_) => _send(),
                 textInputAction: TextInputAction.send,
               ),
             ),
-            const SizedBox(width: AppConstants.smallPadding),
 
-            // Send Button
-            Container(
+            const SizedBox(width: 10),
+
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              width:  42,
+              height: 42,
               decoration: BoxDecoration(
-                color: _canSend ? AppColors.primary : Colors.grey.shade300,
                 shape: BoxShape.circle,
+                color: _canSend ? AppColors.accent : AppColors.surfaceElevated,
               ),
-              child: IconButton(
-                onPressed: _canSend ? _sendMessage : null,
-                icon: widget.isLoading
-                    ? const SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(21),
+                  onTap: _canSend ? _send : null,
+                  child: Center(
+                    child: widget.isLoading
+                        ? const SizedBox(
+                      width: 18, height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth:  2,
+                        valueColor:   AlwaysStoppedAnimation(Colors.white),
+                      ),
+                    )
+                        : Icon(
+                      Icons.arrow_upward_rounded,
+                      size:  20,
+                      color: _canSend ? Colors.white : AppColors.textDisabled,
+                    ),
                   ),
-                )
-                    : const Icon(
-                  Icons.send,
-                  color: Colors.white,
                 ),
               ),
             ),
