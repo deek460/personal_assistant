@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../logic/settings_cubit.dart';
-import '../../../../core/models/ai_model.dart';
+import '../../../../shared/widgets/model_selector_dropdown.dart';
 
 class SettingsScreen extends StatelessWidget {
   final VoidCallback? onSettingsChanged; // ✅ Injected callback
@@ -21,8 +21,12 @@ class SettingsScreen extends StatelessWidget {
             return ListView(
               padding: const EdgeInsets.all(16.0),
               children: [
-                _buildWakeWordSection(context, state),
+                _buildListeningModeSection(context, state),
                 const Divider(height: 32),
+                if (state.listeningMode == 'wakeWord')
+                  _buildWakeWordSection(context, state),
+                if (state.listeningMode == 'wakeWord')
+                  const Divider(height: 32),
                 _buildVoiceSection(context, state),
                 const Divider(height: 32),
                 _buildModelSection(context, state),
@@ -120,64 +124,77 @@ class SettingsScreen extends StatelessWidget {
   }
 
   Widget _buildModelSection(BuildContext context, SettingsLoaded state) {
-    AIModel? matchingModel;
-    if (state.selectedModel != null) {
-      try {
-        matchingModel = state.models.firstWhere((m) => m.id == state.selectedModel!.id); // Fixed variable name
-      } catch (_) {}
-    }
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text('AI Model (Gemma)', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        const Text('AI Model', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
-        DropdownButtonFormField<AIModel>(
-          value: matchingModel,
-          decoration: const InputDecoration(border: OutlineInputBorder(), labelText: 'Active Model'),
-          items: state.models.map((model) => DropdownMenuItem(value: model, child: Text(model.name))).toList(), // Fixed variable name
-          onChanged: (val) {
-            if (val != null) context.read<SettingsCubit>().setModel(val); // Fixed method name
-          },
-        ),
-        const SizedBox(height: 12),
-        ElevatedButton.icon(
-          onPressed: () => _showAddModelDialog(context),
-          icon: const Icon(Icons.upload_file),
-          label: const Text('Import Custom .task Model'),
-          style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+        // ✅ Reuse the existing widget — handles file picking, naming, saving, deleting
+        ModelSelectorDropdown(
+          selectedModel:   state.selectedModel,
+          onModelSelected: (model) => context.read<SettingsCubit>().setModel(model),
         ),
       ],
     );
   }
 
-  Future<void> _showAddModelDialog(BuildContext context) async {
-    final cubit = context.read<SettingsCubit>();
-    final nameController = TextEditingController();
-
-    final name = await showDialog<String>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Add New Model'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
+  Widget _buildListeningModeSection(BuildContext context, SettingsLoaded state) {
+    final isVad = state.listeningMode == 'vad';
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Enter a name for your model, then select the file.'),
+            const Row(
+              children: [
+                Icon(Icons.hearing, color: Colors.blue),
+                SizedBox(width: 8),
+                Text(
+                  'Activation Mode',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Choose how the assistant activates.',
+              style: TextStyle(color: Colors.grey, fontSize: 13),
+            ),
             const SizedBox(height: 16),
-            TextField(controller: nameController, decoration: const InputDecoration(labelText: 'Model Name', border: OutlineInputBorder())),
+            SegmentedButton<String>(
+              segments: const [
+                ButtonSegment(
+                  value: 'wakeWord',
+                  label: Text('Wake Word'),
+                  icon: Icon(Icons.record_voice_over),
+                ),
+                ButtonSegment(
+                  value: 'vad',
+                  label: Text('Voice Activity'),
+                  icon: Icon(Icons.graphic_eq),
+                ),
+              ],
+              selected: {state.listeningMode},
+              onSelectionChanged: (selection) {
+                context
+                    .read<SettingsCubit>()
+                    .setListeningMode(selection.first)
+                    .then((_) => onSettingsChanged?.call());
+              },
+            ),
+            const SizedBox(height: 8),
+            Text(
+              isVad
+                  ? '🎙️ VAD mode: assistant activates the moment you start speaking.'
+                  : '🔑 Wake word mode: say the wake word to activate the assistant.',
+              style: const TextStyle(fontSize: 12, color: Colors.grey),
+            ),
           ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
-          ElevatedButton(onPressed: () => Navigator.pop(dialogContext, nameController.text.trim()), child: const Text('Select File')),
-        ],
       ),
     );
-
-    if (name != null && name.isNotEmpty) {
-      cubit.pickAndAddCustomModel(name);
-    } else if (name != null && name.isEmpty) {
-      cubit.pickAndAddCustomModel("Imported Model");
-    }
   }
 }

@@ -18,14 +18,16 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-
-
     defaultConfig {
         applicationId = "com.example.personal_assistant"
         minSdk = 29
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
+
+        ndk{
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     lint {
@@ -77,4 +79,10 @@ kotlin {
 dependencies {
     implementation(platform("com.google.firebase:firebase-bom:34.7.0"))
     implementation("com.google.firebase:firebase-analytics")
+}
+
+// Exclude onnxruntime-android brought in by vad/other packages
+// since flutter_wake_word already bundles it inside keyworddetection.aar
+configurations.all {
+    exclude(group = "com.microsoft.onnxruntime", module = "onnxruntime-android")
 }

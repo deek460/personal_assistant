@@ -8,6 +8,7 @@ class ModelManagementService {
   static const String _wakeWordsKey = 'wake_words';
   static const String _selectedWakeWordKey = 'selected_wake_word';
   static const String _voiceKey = 'selected_voice_preferences';
+  static const _listeningModeKey = 'listening_mode';
 
   static final ModelManagementService _instance = ModelManagementService._internal();
   factory ModelManagementService() => _instance;
@@ -120,5 +121,15 @@ class ModelManagementService {
   Future<void> saveSelectedVoice(Map<String, String> voice) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_voiceKey, json.encode(voice));
+  }
+
+  Future<String> getListeningMode() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_listeningModeKey) ?? 'wakeWord'; // default to wake word
+  }
+
+  Future<void> saveListeningMode(String mode) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_listeningModeKey, mode);
   }
 }

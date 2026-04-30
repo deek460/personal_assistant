@@ -1,7 +1,10 @@
+import 'dart:io';
+import 'package:path_provider/path_provider.dart';
 import 'package:flutter/material.dart';
 import '../../core/models/ai_model.dart';
 import '../../core/services/model_management_service.dart';
 import 'package:file_picker/file_picker.dart';
+import '../../core/theme//app_colors.dart';
 
 class ModelSelectorDropdown extends StatefulWidget {
   final Function(AIModel) onModelSelected;
@@ -94,28 +97,48 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
     try {
       FilePickerResult? result = await FilePicker.pickFiles(type: FileType.any);
       if (result != null && result.files.single.path != null) {
-        String path = result.files.single.path!;
-        String fileName = result.files.single.name;
+        final tempPath  = result.files.single.path!;
+        final fileName  = result.files.single.name;
+
+        // ✅ Copy from cache to permanent app storage
+        final permanentPath = await _copyModelToAppStorage(tempPath, fileName);
+
         final newModel = AIModel(
-          id: 'custom-${DateTime.now().millisecondsSinceEpoch}',
-          name: name.isEmpty ? fileName : name,
-          address: path,
-          isDefault: false,
+          id:             'custom-${DateTime.now().millisecondsSinceEpoch}',
+          name:           name.isEmpty ? fileName : name,
+          address:        permanentPath, // ✅ Use permanent path
+          isDefault:      false,
           isGpuSupported: null,
         );
 
         await _modelService.addModel(newModel);
         await _loadModels();
 
-        if (mounted) {
-          widget.onModelSelected(newModel);
-        }
+        if (mounted) widget.onModelSelected(newModel);
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to import model: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to import model: $e')),
+        );
       }
     }
+  }
+
+// ✅ Copies the picked file to permanent internal storage
+  Future<String> _copyModelToAppStorage(String sourcePath, String fileName) async {
+    final appDir    = await getApplicationDocumentsDirectory();
+    final modelsDir = Directory('${appDir.path}/models');
+    if (!await modelsDir.exists()) await modelsDir.create(recursive: true);
+
+    final destPath = '${modelsDir.path}/$fileName';
+    final destFile = File(destPath);
+
+    // Skip copy if already in permanent storage
+    if (await destFile.exists() && sourcePath == destPath) return destPath;
+
+    await File(sourcePath).copy(destPath);
+    return destPath;
   }
 
   Future<void> _showDeleteConfirmation(AIModel model) async {
@@ -174,17 +197,23 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
-        border: Border.all(color: Colors.grey.shade300),
-        borderRadius: BorderRadius.circular(8),
+        color:        AppColors.surfaceElevated,              // ✅ dark bg
+        border:       Border.all(color: AppColors.surfaceBorder),
+        borderRadius: BorderRadius.circular(10),
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
-          value: dropdownValue,
-          isExpanded: true,
-          itemHeight: null, // FIX: Removes the strict 48px height constraint
+          value:       dropdownValue,
+          isExpanded:  true,
+          itemHeight:  null,
+          dropdownColor: AppColors.surfaceElevated,           // ✅ dark dropdown menu
+          iconEnabledColor: AppColors.textSecondary,
           hint: const Padding(
             padding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-            child: Text('Select Model'),
+            child: Text(
+              'Select Model',
+              style: TextStyle(color: AppColors.textSecondary),
+            ),
           ),
           items: [
             ..._models.map((model) => DropdownMenuItem<String>(
@@ -192,26 +221,29 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
               child: GestureDetector(
                 onLongPress: () => _showDeleteConfirmation(model),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), // Adjusted vertical padding
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Flexible(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
+                          mainAxisSize:       MainAxisSize.min,
                           children: [
                             Text(
                               model.name,
-                              style: const TextStyle(fontWeight: FontWeight.w500),
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w500,
+                                color:      AppColors.textPrimary,  // ✅
+                              ),
                               overflow: TextOverflow.ellipsis,
                             ),
                             if (!model.isDefault)
                               Text(
                                 model.address,
-                                style: TextStyle(
+                                style: const TextStyle(
                                   fontSize: 12,
-                                  color: Colors.grey.shade600,
+                                  color:    AppColors.textSecondary, // ✅
                                 ),
                                 overflow: TextOverflow.ellipsis,
                               ),
@@ -220,17 +252,17 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
                       ),
                       if (model.isDefault)
                         Container(
-                          margin: const EdgeInsets.only(left: 8),
+                          margin:  const EdgeInsets.only(left: 8),
                           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                           decoration: BoxDecoration(
-                            color: Colors.blue.shade100,
+                            color:        AppColors.accentDim,       // ✅
                             borderRadius: BorderRadius.circular(4),
                           ),
-                          child: Text(
+                          child: const Text(
                             'Default',
                             style: TextStyle(
                               fontSize: 10,
-                              color: Colors.blue.shade700,
+                              color:    AppColors.accent,            // ✅
                             ),
                           ),
                         ),
@@ -245,13 +277,13 @@ class _ModelSelectorDropdownState extends State<ModelSelectorDropdown> {
                 padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 child: Row(
                   children: [
-                    Icon(Icons.add_circle_outline, color: Colors.blue),
+                    Icon(Icons.add_circle_outline, color: AppColors.accent),
                     SizedBox(width: 8),
                     Text(
                       'Add New Model...',
                       style: TextStyle(
-                          color: Colors.blue,
-                          fontWeight: FontWeight.bold
+                        color:      AppColors.accent,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                   ],

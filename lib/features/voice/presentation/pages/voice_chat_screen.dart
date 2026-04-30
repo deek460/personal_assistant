@@ -20,6 +20,7 @@ import '../../../../core/models/ai_model.dart';
 import '../../../../core/services/model_management_service.dart';
 import '../../../../features/settings/presentation/pages/settings_page.dart';
 import '../../../../features/settings/presentation/logic/settings_cubit.dart';
+import '../../services/vad_service.dart';
 
 class VoiceChatScreen extends StatefulWidget {
   const VoiceChatScreen({Key? key}) : super(key: key);
@@ -86,6 +87,7 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
         TextToSpeechService(),
         WakeWordService(),
         GenerateResponseUseCase(GemmaRepositoryImpl()),
+        VadService(),
       )..initializeServices(),
       child: Builder(builder: (context) {
         return Scaffold(

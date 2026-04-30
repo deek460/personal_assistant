@@ -135,7 +135,8 @@ class TextToSpeechService {
           // We restrict to English and Indian variants to avoid listing every world language
           bool isUS = locale.contains('en-us') || locale.contains('en_us');
           bool isUK = locale.contains('en-gb') || locale.contains('en_gb');
-          bool isIndia = locale.contains('en-in') || locale.contains('en_in');; // Covers en-IN, hi-IN, bn-IN, etc.
+          bool isIndia = locale.contains('en-in') || locale.contains('en_in'); // Covers en-IN, hi-IN, bn-IN, etc.
+          bool isHindi = locale.contains('local') || locale.contains('language');
 
           if (!isUS && !isUK && !isIndia) return false;
 

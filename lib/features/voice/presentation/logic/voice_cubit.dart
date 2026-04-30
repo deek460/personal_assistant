@@ -16,6 +16,7 @@ import '../../../../core/services/model_management_service.dart';
 import 'package:firebase_performance/firebase_performance.dart';
 import '../../../settings/presentation/pages/settings_page.dart';
 import '../../../settings/presentation/logic/settings_cubit.dart';
+import '../../services/vad_service.dart';
 
 abstract class VoiceState {
   final List<VoiceChatMessage> chatHistory;
@@ -91,6 +92,7 @@ class VoiceCubit extends Cubit<VoiceState> {
   final SpeechToTextService _speechService;
   final TextToSpeechService _ttsService;
   final WakeWordService _wakeWordService;
+  final VadService _vadService;
   final GenerateResponseUseCase _generateResponseUseCase;
   final ModelManagementService _modelManagementService = ModelManagementService();
 
@@ -113,6 +115,7 @@ class VoiceCubit extends Cubit<VoiceState> {
       this._ttsService,
       this._wakeWordService,
       this._generateResponseUseCase,
+      this._vadService,
       ) : super(VoiceInitial());
 
   String? get pendingImagePath => _pendingImagePath;
@@ -199,6 +202,8 @@ class VoiceCubit extends Cubit<VoiceState> {
 
       // ✅ Set license key FIRST before any wake word engine call
       await _wakeWordService.initialize();
+
+      await _vadService.initialize();
 
       // Load saved TTS voice if available
       final savedVoice = await _modelManagementService.getSelectedVoice();
@@ -302,55 +307,86 @@ class VoiceCubit extends Cubit<VoiceState> {
 
 // 🔴 1. THE HARDWARE DELAY FIX
 // --- REPLACED: Fetch the wake word dynamically! ---
-Future<void> startSentinelMode() async {
-  _isManualStop = false;
-  await _speechService.stopListening();
+  Future<void> startSentinelMode() async {
+    _isManualStop = false;
+    await _speechService.stopListening();
 
-  // Hardware delay to release mic lock
-  await Future.delayed(const Duration(milliseconds: 600));
+    // Hardware delay to release mic lock
+    await Future.delayed(const Duration(milliseconds: 600));
 
-  emit(VoiceWaitingForWakeWord(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
+    emit(VoiceWaitingForWakeWord(_chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
 
-  // 🔴 Ask the storage for the active wake word right now
-  final activeWakeWord = await _modelManagementService.getSelectedWakeWord();
+    // 🔴 Fetch both the active wake word AND the listening mode from storage
+    final activeWakeWord = await _modelManagementService.getSelectedWakeWord();
+    final listeningMode = await _modelManagementService.getListeningMode();
 
-  bool success = await _wakeWordService.startListening(
-      wakeWord: activeWakeWord,
-      onDetect: _onWakeWordDetected
-  );
+    bool success = false;
 
-  if (!success) {
-    String errorMsg = "Microphone lock error. Tap the mic icon to retry.";
-    _chatHistory.add(VoiceChatMessage(id: DateTime.now().toString(), text: errorMsg, isUser: false, timestamp: DateTime.now()));
-    emit(VoiceError(errorMsg, _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
+    if (listeningMode == 'vad') {
+      await _wakeWordService.stopListening(); // Ensure wake word is off
+      success = await _vadService.startListening(
+        onDetect: _onWakeWordDetected,
+      );
+    } else {
+      await _vadService.stopListening(); // Ensure VAD is off
+      success = await _wakeWordService.startListening(
+        wakeWord: activeWakeWord,
+        onDetect: _onWakeWordDetected,
+      );
+    }
+
+    if (!success) {
+      String errorMsg = "Microphone lock error. Tap the mic icon to retry.";
+      _chatHistory.add(VoiceChatMessage(id: DateTime.now().toString(), text: errorMsg, isUser: false, timestamp: DateTime.now()));
+      emit(VoiceError(errorMsg, _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
+    }
   }
-}
 
-void _onWakeWordDetected() async {
-  if (_isManualStop) return;
-  await _wakeWordService.stopListening();
+  void _onWakeWordDetected() async {
+    if (_isManualStop) return;
 
-  await Future.delayed(const Duration(milliseconds: 600));
+    await _wakeWordService.stopListening();
+    await _vadService.stopListening();
+    await Future.delayed(const Duration(milliseconds: 600));
 
-  // 🔴 Fetch it again to know what to display on the screen
-  final activeWakeWord = await _modelManagementService.getSelectedWakeWord();
-  String displayWake = activeWakeWord[0].toUpperCase() + activeWakeWord.substring(1);
+    final listeningMode = await _modelManagementService.getListeningMode();
 
-  _chatHistory.add(VoiceChatMessage(
-      id: DateTime.now().toString(),
-      text: displayWake,
-      isUser: true,
-      timestamp: DateTime.now()
-  ));
+    // 🔴 VAD ROUTE: Jump instantly to dictation. Do NOT speak.
+    if (listeningMode == 'vad') {
+      _chatHistory.add(VoiceChatMessage(
+          id: DateTime.now().toString(),
+          text: "Voice Detected",
+          isUser: true,
+          timestamp: DateTime.now()
+      ));
+      emit(VoiceResponseReady("Voice Detected", "Listening...", _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
 
-  emit(VoiceResponseReady(displayWake, "Yes?", _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
-  await _ttsService.speak("Yes?");
-  await _ttsService.waitForCompletion();
+      if (!_isManualStop) {
+        await startActiveDictation();
+      }
+      return;
+    }
 
-  if (!_isManualStop) {
-    await startActiveDictation();
+    // 🔵 WAKE WORD ROUTE: Say "Yes?" and wait.
+    final activeWakeWord = await _modelManagementService.getSelectedWakeWord();
+    String displayMsg = activeWakeWord[0].toUpperCase() + activeWakeWord.substring(1);
+
+    _chatHistory.add(VoiceChatMessage(
+        id: DateTime.now().toString(),
+        text: displayMsg,
+        isUser: true,
+        timestamp: DateTime.now()
+    ));
+
+    emit(VoiceResponseReady(displayMsg, "Yes?", _chatHistory, pendingImagePath: _pendingImagePath, isLiveVisionEnabled: _isLiveVisionEnabled, cameraController: _cameraController));
+
+    await _ttsService.speak("Yes?");
+    await _ttsService.waitForCompletion();
+
+    if (!_isManualStop) {
+      await startActiveDictation();
+    }
   }
-}
 
   // void _onWakeWordDetected() async {
   //   if (_isManualStop) return;

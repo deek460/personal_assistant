@@ -25,6 +25,8 @@ class SettingsLoaded extends SettingsState {
   final List<String> availableWakeWords;
   final String selectedWakeWord;
 
+  final String listeningMode; // 'wakeWord' or 'vad'
+
   const SettingsLoaded({
     required this.models,
     this.selectedModel,
@@ -32,6 +34,7 @@ class SettingsLoaded extends SettingsState {
     this.selectedVoice,
     required this.availableWakeWords,
     required this.selectedWakeWord,
+    required this.listeningMode,
   });
 
   SettingsLoaded copyWith({
@@ -41,6 +44,7 @@ class SettingsLoaded extends SettingsState {
     Map<String, String>? selectedVoice,
     List<String>? availableWakeWords,
     String? selectedWakeWord,
+    String? listeningMode,
   }) {
     return SettingsLoaded(
       models: models ?? this.models,
@@ -49,12 +53,13 @@ class SettingsLoaded extends SettingsState {
       selectedVoice: selectedVoice ?? this.selectedVoice,
       availableWakeWords: availableWakeWords ?? this.availableWakeWords,
       selectedWakeWord: selectedWakeWord ?? this.selectedWakeWord,
+      listeningMode: listeningMode ?? this.listeningMode,
     );
   }
 
   @override
   List<Object?> get props => [
-    models, selectedModel, voices, selectedVoice, availableWakeWords, selectedWakeWord
+    models, selectedModel, voices, selectedVoice, availableWakeWords, selectedWakeWord,listeningMode,
   ];
 }
 
@@ -84,6 +89,8 @@ class SettingsCubit extends Cubit<SettingsState> {
       final wakeWords = await _modelService.getWakeWords();
       final selectedWake = await _modelService.getSelectedWakeWord();
 
+      final listeningMode = await _modelService.getListeningMode();
+
       emit(SettingsLoaded(
         models: models,
         selectedModel: selectedModel,
@@ -91,6 +98,7 @@ class SettingsCubit extends Cubit<SettingsState> {
         selectedVoice: selectedVoice,
         availableWakeWords: wakeWords,
         selectedWakeWord: selectedWake,
+        listeningMode: listeningMode,
       ));
     } catch (e) {
       emit(SettingsError(e.toString()));
@@ -120,6 +128,14 @@ class SettingsCubit extends Cubit<SettingsState> {
     if (currentState is SettingsLoaded) {
       await _modelService.setSelectedModelId(model.id);
       emit(currentState.copyWith(selectedModel: model));
+    }
+  }
+
+  Future<void> setListeningMode(String mode) async {
+    final currentState = state;
+    if (currentState is SettingsLoaded) {
+      await _modelService.saveListeningMode(mode);
+      emit(currentState.copyWith(listeningMode: mode));
     }
   }
 

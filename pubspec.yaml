@@ -44,6 +44,7 @@ dependencies:
   google_mlkit_text_recognition: ^0.15.1
   google_mlkit_image_labeling: ^0.14.2
   camera: ^0.12.0+1
+  vad: ^0.0.7+1  # add this instead
 
 
   flutter:
@@ -122,6 +123,7 @@ flutter:
       - assets/maya.onnx
       - assets/vqa_test/dataset.json
       - assets/vqa_test/images/
+      - assets/models/silero_vad.onnx
 
   fonts:
       - family: DM Sans

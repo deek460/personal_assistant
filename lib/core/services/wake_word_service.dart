@@ -39,7 +39,7 @@ class WakeWordService {
 
     final instanceId = wakeWord.toLowerCase();
     final modelFileName = '$instanceId.onnx';
-    const double threshold = 0.9000;
+    const double threshold = 0.8000;
     const int bufferCnt = 1;
     final currentConfigHash = _makeConfigHash(threshold, bufferCnt);
 
